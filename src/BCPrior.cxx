@@ -173,7 +173,7 @@ BCH1D BCPrior::GetBCH1D(TH1* bins, const std::string& name)
 }
 
 // ---------------------------------------------------------
-BCH2D BCPrior::GetBCH2D(BCPrior* ordinate, TH2* bins, const std::string& name)
+BCH2D BCPrior::GetBCH2D(std::shared_ptr<BCPrior> ordinate, TH2* bins, const std::string& name)
 {
     BCH2D bch2;
 

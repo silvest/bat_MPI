@@ -46,10 +46,15 @@
 #include <TTree.h>
 
 #include <cmath>
+#include <memory>
 
 #if THREAD_PARALLELIZATION
 #include <omp.h>
 #endif
+
+/* Begin MPI MOD */
+#include <mpi.h>
+/* End MPI MOD */
 
 // ---------------------------------------------------------
 BCEngineMCMC::BCEngineMCMC(const std::string& name)
@@ -84,6 +89,9 @@ BCEngineMCMC::BCEngineMCMC(const std::string& name)
     SetName(name);
     SetPrecision(BCEngineMCMC::kMedium);
     SetRandomSeed(0);
+    /* Begin MPI MOD */
+    MPI_Comm_size(MPI_COMM_WORLD, &procnum);
+    /* End MPI MOD */
 }
 
 // ---------------------------------------------------------
@@ -120,6 +128,9 @@ BCEngineMCMC::BCEngineMCMC(const std::string& filename, const std::string& name,
     SetPrecision(BCEngineMCMC::kMedium);
     SetRandomSeed(0);
     LoadMCMC(filename, "", "", loadObservables);
+    /* Begin MPI MOD */
+    MPI_Comm_size(MPI_COMM_WORLD, &procnum);
+    /* End MPI MOD */
 }
 
 // ---------------------------------------------------------
@@ -186,6 +197,9 @@ BCEngineMCMC::BCEngineMCMC(const BCEngineMCMC& other)
     SetNChains(other.fMCMCNChains);
 
     CloneMarginals(other);
+    /* Begin MPI MOD */
+    MPI_Comm_size(MPI_COMM_WORLD, &procnum);
+    /* End MPI MOD */
 }
 
 BCEngineMCMC& BCEngineMCMC::operator=(const BCEngineMCMC& other)
@@ -256,6 +270,9 @@ BCEngineMCMC& BCEngineMCMC::operator=(const BCEngineMCMC& other)
         // don't create file!
 
         CloneMarginals(other);
+        /* Begin MPI MOD */
+        procnum = other.procnum;
+        /* End MPI MOD */
     } catch (...) {
         // leave object in sane state but otherwise don't know what to do with exception
         DeleteMarginals();
@@ -315,27 +332,27 @@ void BCEngineMCMC::SetName(const std::string& name)
 void BCEngineMCMC::SetPrior(unsigned index, TF1& f, bool logL)
 {
     if (logL)
-        fParameters.At(index).SetPrior(new BCTF1LogPrior(f));
+      fParameters.At(index).SetPrior(std::make_shared<BCTF1LogPrior>(f));
     else
-        fParameters.At(index).SetPrior(new BCTF1Prior(f));
+      fParameters.At(index).SetPrior(std::make_shared<BCTF1Prior>(f));
 }
 
 // ---------------------------------------------------------
 void BCEngineMCMC::SetPrior(unsigned index, TH1& h, bool interpolate)
 {
-    fParameters.At(index).SetPrior(new BCTH1Prior(h, interpolate));
+  fParameters.At(index).SetPrior(std::make_shared<BCTH1Prior>(h, interpolate));
 }
 
 // ---------------------------------------------------------
 void BCEngineMCMC::SetPriorGauss(unsigned index, double mean, double sigma)
 {
-    fParameters.At(index).SetPrior(new BCGaussianPrior(mean, sigma));
+  fParameters.At(index).SetPrior(std::make_shared<BCGaussianPrior>(mean, sigma));
 }
 
 // ---------------------------------------------------------
 void BCEngineMCMC::SetPriorGauss(unsigned index, double mean, double sigma_below, double sigma_above)
 {
-    fParameters.At(index).SetPrior(new BCSplitGaussianPrior(mean, sigma_below, sigma_above));
+  fParameters.At(index).SetPrior(std::make_shared<BCSplitGaussianPrior>(mean, sigma_below, sigma_above));
 }
 
 // ---------------------------------------------------------
@@ -1576,73 +1593,129 @@ bool BCEngineMCMC::GetProposalPointMetropolis(unsigned ichain, unsigned ipar, st
     return GetParameter(ipar).IsWithinLimits(x[ipar]);
 }
 
+/* Begin MPI MOD */
 // --------------------------------------------------------
-bool BCEngineMCMC::AcceptOrRejectPoint(unsigned chain, unsigned parameter)
+bool BCEngineMCMC::AcceptOrRejectPoint(unsigned parameter)
 {
-    // retrieve current probability
-    double p0 = fMCMCStates[chain].log_probability;
-    if (!std::isfinite(p0)) p0 = -std::numeric_limits<double>::max();
-    // calculate proposed probability
-    const double p1 = LogEval(fMCMCThreadLocalStorage[chain].parameters);
+    bool return_value = true;
+    unsigned mychain = 0;
+    int iproc = 0;
+    unsigned npars = fParameters.Size();
+    int buffsize = npars + 1;
+    double p0[procnum];
+    int index_chain[procnum];    
+    std::vector<double> pars;
 
-    // if the new point is more probable, keep it; or else throw dice
-    if (std::isfinite(p1) && (p1 >= p0 || log(fMCMCThreadLocalStorage[chain].rng->Rndm()) < (p1 - p0))) {
-        // accept point
-        fMCMCStates[chain] = fMCMCThreadLocalStorage[chain];
-        // increase efficiency
-        fMCMCStatistics[chain].efficiency[parameter] += (1. - fMCMCStatistics[chain].efficiency[parameter]) / (fMCMCStatistics[chain].n_samples_efficiency + 1.);
-        // execute user code and return
-        MCMCCurrentPointInterface(fMCMCStates[chain].parameters, chain, true);
-        return true;
+    //------------------
+    double *recvbuff = new double[buffsize];
+    double **buff;
+    buff = new double*[procnum];
+    buff[0]=new double[procnum];
+    for(int i = 1; i < procnum; i++) buff[i]=buff[i - 1] + 1;
+    double ** sendbuff = new double *[procnum];
+    sendbuff[0] = new double[procnum * buffsize];
+    for (int il = 1; il < procnum; il++) sendbuff[il] = sendbuff[il - 1] + buffsize;
+    //------------------
+    
+    double ll;
+    bool last = false;
+    bool valid = false;
+    
+    while (mychain < fMCMCNChains) {
+        bool accept = false;
+        // increase counter
+        UpdateChainIndex(mychain);
+        ++fMCMCStates[mychain].iteration;
+        
+        // get proposal point (0 for multivariate proposal)
+        if (fMCMCProposeMultivariate) valid = GetProposalPointMetropolis(mychain, fMCMCThreadLocalStorage[mychain].parameters);
+        else valid = GetProposalPointMetropolis(mychain, parameter, fMCMCThreadLocalStorage[mychain].parameters);
+        
+        if (valid) {
+            if (!last) {
+                // retrieve current probability
+                p0[iproc] = fMCMCStates[mychain].log_probability;
+                if (!std::isfinite(p0[iproc])) p0[iproc] = -std::numeric_limits<double>::max();
+                index_chain[iproc] = mychain;
+                iproc++;
+                mychain++;
+                if (iproc < procnum && mychain < fMCMCNChains) continue;
+            } else if (iproc == 0) break;
+            for(int il = 0; il < iproc ; il++) {
+                //The first entry of the array specifies the task to be executed.
+                sendbuff[il][0] = 1.; // 1 = likelihood calculation
+                for (int im = 1; im < buffsize; im++) sendbuff[il][im] = fMCMCThreadLocalStorage[index_chain[il]].parameters.at(im-1);//fMCMCxvect[il][im-1];
+            }
+            for(int il = iproc ; il < procnum; il++) sendbuff[il][0] = 0.; // 0 = nothing to execute
+            
+            MPI_Scatter(sendbuff[0], buffsize, MPI_DOUBLE, recvbuff, buffsize, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+            
+            if (recvbuff[0] == 1.) {
+                pars.assign(recvbuff + 1, recvbuff + buffsize);
+                ll = LogEval(pars);
+            } else ll = log(0.);
+            
+            MPI_Gather(&ll, 1, MPI_DOUBLE, buff[0], 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+
+            for (int j = 0; j < iproc; j++) {
+                // if the new point is more probable, keep it; or else throw dice
+                if (std::isfinite(*buff[j]) && (*buff[j] >= p0[j] || log(fMCMCThreadLocalStorage[index_chain[j]].rng->Rndm()) < (*buff[j] - p0[j]))) {
+                    // accept point
+                    // The next three lines are not in vanilla BAT. This update is done by LogEval (LogProbabilityNN in BCModel) but that does not work for MPI.
+                    fMCMCThreadLocalStorage[index_chain[j]].log_probability = *buff[j]; 
+                    fMCMCThreadLocalStorage[index_chain[j]].log_prior = LogAPrioriProbability(fMCMCThreadLocalStorage[index_chain[j]].parameters);
+                    fMCMCThreadLocalStorage[index_chain[j]].log_likelihood = fMCMCThreadLocalStorage[index_chain[j]].log_probability - fMCMCThreadLocalStorage[index_chain[j]].log_prior;
+                    // Copy everything into the States.
+                    fMCMCStates[index_chain[j]] = fMCMCThreadLocalStorage[index_chain[j]];
+                    // increase efficiency
+                    fMCMCStatistics[index_chain[j]].efficiency[parameter] += (1. - fMCMCStatistics[index_chain[j]].efficiency[parameter]) / (fMCMCStatistics[index_chain[j]].n_samples_efficiency + 1.);
+                    accept = true;
+                } else {
+                    // else decrease efficiency
+                    fMCMCStatistics[index_chain[j]].efficiency[parameter] *= 1.*fMCMCStatistics[index_chain[j]].n_samples_efficiency / (fMCMCStatistics[index_chain[j]].n_samples_efficiency + 1.);
+                    accept = false;
+                 // if log(likelihood) of proposed point was not a finite number
+                 /* if (!std::isfinite(*buff[j])) {
+                        if (fMCMCProposeMultivariate) {
+                            BCLog::OutDebug(Form("log(probability) evaluated to nan or inf in chain %i while at ", chain));
+                            PrintParameters(fMCMCThreadLocalStorage[index_chain[j]].parameters, BCLog::OutDebug);
+                        } else
+                            BCLog::OutDebug(Form("log(probability) evaluated to nan or inf in chain %i while varying parameter %s to %.3e", chain, GetParameter(parameter).GetName().data(), fMCMCThreadLocalStorage[index_chain[j]].parameters[parameter]));
+                    } HEPfit NOTE: Output suppressed since it is printed too often for flat weights. */
+                }
+            }
+            iproc = 0;
+        } else {
+            mychain++;
+            if (mychain < fMCMCNChains) continue;
+            else last = true;
+            accept = false;
+        }
+        return_value &= accept;
+        MCMCCurrentPointInterface(fMCMCThreadLocalStorage[mychain].parameters, mychain, accept);
     }
-
-    // else decrease efficiency
-    fMCMCStatistics[chain].efficiency[parameter] *= 1.*fMCMCStatistics[chain].n_samples_efficiency / (fMCMCStatistics[chain].n_samples_efficiency + 1.);
-
-    // if log(likelihood) of proposed point was not a finite number
-    if (!std::isfinite(p1)) {
-        if (fMCMCProposeMultivariate) {
-            BCLog::OutDebug(Form("log(probability) evaluated to nan or inf in chain %i while at ", chain));
-            PrintParameters(fMCMCThreadLocalStorage[chain].parameters, BCLog::OutDebug);
-        } else
-            BCLog::OutDebug(Form("log(probability) evaluated to nan or inf in chain %i while varying parameter %s to %.3e", chain, GetParameter(parameter).GetName().data(), fMCMCThreadLocalStorage[chain].parameters[parameter]));
-    }
-
-    // execute user code and return
-    MCMCCurrentPointInterface(fMCMCThreadLocalStorage[chain].parameters, chain, false);
-    return false;
+    
+    delete sendbuff[0];
+    delete [] sendbuff;
+    delete [] recvbuff;
+    delete buff[0];
+    delete [] buff;
+    
+    return return_value;
 }
 
 // --------------------------------------------------------
-bool BCEngineMCMC::GetNewPointMetropolis(unsigned chain, unsigned parameter)
-{
-    // increase counter
-    ++fMCMCStates[chain].iteration;
-
-    // get proposal point
-    if (GetProposalPointMetropolis(chain, parameter, fMCMCThreadLocalStorage[chain].parameters))
-        return AcceptOrRejectPoint(chain, parameter);
-
-    // execute user code and return
-    MCMCCurrentPointInterface(fMCMCThreadLocalStorage[chain].parameters, chain, false);
-    return false;
+bool BCEngineMCMC::GetChosenNewPointMetropolis(unsigned parameter)
+{        
+    return AcceptOrRejectPoint(parameter);
 }
 
 // --------------------------------------------------------
-bool BCEngineMCMC::GetNewPointMetropolis(unsigned chain)
-{
-    // increase counter
-    ++fMCMCStates[chain].iteration;
-
-    // get proposal point
-    if (GetProposalPointMetropolis(chain, fMCMCThreadLocalStorage[chain].parameters))
-        return AcceptOrRejectPoint(chain, 0);
-
-    // execute user code and return
-    MCMCCurrentPointInterface(fMCMCThreadLocalStorage[chain].parameters, chain, false);
-    return false;
+bool BCEngineMCMC::GetChosenNewPointMetropolis()
+{    
+    return AcceptOrRejectPoint(0);
 }
-
+/* End MPI MOD */
 //--------------------------------------------------------
 bool BCEngineMCMC::GetNewPointMetropolis()
 {
@@ -1654,24 +1727,18 @@ bool BCEngineMCMC::GetNewPointMetropolis()
         for (unsigned ipar = 0; ipar < GetNParameters(); ++ipar) {
             if (GetParameter(ipar).Fixed())
                 continue;
-
-            //loop over chains
+            /* Begin MPI MOD */
             #pragma omp parallel for schedule(static)
-            for (unsigned c = 0; c < fMCMCNChains; ++c) {
-                UpdateChainIndex(c);
-                return_value &= GetNewPointMetropolis(c, ipar);
-            }
+            return_value &= GetChosenNewPointMetropolis(ipar);
+            /* End MPI MOD */
         }
 
     } else {
+        /* Begin MPI MOD */
         /* run over all pars at once */
-
-        //loop over chains
         #pragma omp parallel for schedule(static)
-        for (unsigned c = 0; c < fMCMCNChains; ++c) {
-            UpdateChainIndex(c);
-            return_value &= GetNewPointMetropolis(c);
-        }
+        return_value &= GetChosenNewPointMetropolis();
+        /* End MPI MOD */
     }
 
     // increase number of iterations used in each chain for calculating efficiencies
@@ -1679,7 +1746,7 @@ bool BCEngineMCMC::GetNewPointMetropolis()
         fMCMCStatistics[c].n_samples_efficiency += 1;
 
     ++fMCMCCurrentIteration;
-    return return_value;
+    return return_value; // HEPfit note: return_value is unused anywhere in BCEngineMCMC
 }
 
 // --------------------------------------------------------
@@ -1767,7 +1834,7 @@ bool BCEngineMCMC::MetropolisPreRun()
     // initialize Markov chain
     MCMCInitialize();
 
-    if (fMCMCFlagWritePreRunToFile)
+    if (!fMCMCOutputFile && fMCMCFlagWritePreRunToFile) // HEPfit Note: Modification required to access Root tree from HEPfit consistently.
         InitializeMarkovChainTree();
 
     // perform run
@@ -2201,7 +2268,7 @@ bool BCEngineMCMC::Metropolis()
         for (unsigned c = 0; c < fMCMCStates.size(); ++c)
             fMCMCStates[c].iteration = 0;
     }
-    if (fMCMCFlagWriteChainToFile)
+    if (!fMCMCOutputFile && fMCMCFlagWriteChainToFile) // HEPfit Note: Modification required to access Root tree from HEPfit consistently.
         InitializeMarkovChainTree(false, false);
 
     // check that correct objects of correct size have been created
@@ -2634,11 +2701,11 @@ void BCEngineMCMC::CreateHistograms(bool rescale_ranges)
         if (GetVariable(i).FillH1()) {
             if (i < GetNParameters()) { // parameter
                 if (!GetParameter(i).Fixed()) {
-                    fH1Marginalized[i] = GetVariable(i).CreateH1(Form("h1_%s_parameter_%s", GetSafeName().data(), GetParameter(i).GetSafeName().data()));
+                    fH1Marginalized[i] = GetVariable(i).CreateH1(Form("h1_%s_parameter_%s", GetSafeName().data() , GetParameter(i).GetSafeName().data()));
                     ++filling;
                 }
             } else {                  // user-defined observable
-                fH1Marginalized[i] = GetVariable(i).CreateH1(Form("h1_%s_observable_%s", GetSafeName().data(), GetVariable(i).GetSafeName().data()));
+                fH1Marginalized[i] = GetVariable(i).CreateH1(Form("h1_%s_observable_%s", GetSafeName().data() , GetVariable(i).GetSafeName().data()));
                 ++filling;
             }
         }

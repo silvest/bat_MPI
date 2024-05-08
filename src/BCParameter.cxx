@@ -40,7 +40,7 @@ BCParameter::BCParameter(const BCParameter& other) :
     fPrior(NULL)
 {
     if (other.fPrior)
-        SetPrior(other.fPrior->Clone());
+        SetPrior(other.fPrior);
 }
 
 // ---------------------------------------------------------
@@ -58,7 +58,7 @@ BCParameter::BCParameter(const std::string& name, double lowerlimit, double uppe
 // ---------------------------------------------------------
 BCParameter::~BCParameter()
 {
-    delete fPrior;
+  fPrior.reset();
 }
 
 // ---------------------------------------------------------
@@ -133,9 +133,8 @@ double BCParameter::GetRandomValueAccordingToPrior(TRandom* const R) const
 }
 
 // ---------------------------------------------------------
-void BCParameter::SetPrior(BCPrior* const prior)
+void BCParameter::SetPrior(std::shared_ptr<BCPrior> const prior)
 {
-    delete fPrior;
     fPrior = prior;
     if (fPrior)
         fPrior->SetFunctionRange(fLowerLimit, fUpperLimit);
@@ -144,7 +143,7 @@ void BCParameter::SetPrior(BCPrior* const prior)
 // ---------------------------------------------------------
 void BCParameter::SetPriorConstant()
 {
-    SetPrior(new BCConstantPrior(GetRangeWidth()));
+  SetPrior(std::make_shared<BCConstantPrior>(GetRangeWidth()));
 }
 
 // ---------------------------------------------------------

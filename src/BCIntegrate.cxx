@@ -24,6 +24,7 @@
 #include <TRandom3.h>
 #include <TString.h>
 #include <TTree.h>
+#include <Math/Util.h>
 
 #ifdef HAVE_CUBA_H
 #include <cuba.h>

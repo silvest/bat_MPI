@@ -21,7 +21,7 @@ CombinationModel::CombinationModel(const std::string& name,
                  "mass", "[MeV]");
 
     // set its prior to the old mean and sigma
-    GetParameter("mass").SetPrior(new BCPositiveDefinitePrior(new BCGaussianPrior(old_mean, old_sigma)));
+    GetParameter("mass").SetPrior(std::make_shared<BCPositiveDefinitePrior>(std::make_shared<BCGaussianPrior>(old_mean, old_sigma)));
 }
 
 // ---------------------------------------------------------

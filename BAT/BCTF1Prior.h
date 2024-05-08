@@ -41,6 +41,9 @@ public:
     /** Constructor with formula and limits. */
     BCTF1Prior(const std::string& formula, double xmin, double xmax);
 
+    /** Constructor with formula, parameters and limits. */
+    BCTF1Prior(const std::string& formula, std::vector<double> & pars, double xmin, double xmax);
+
     /** Destrcutor */
     virtual ~BCTF1Prior() {};
 

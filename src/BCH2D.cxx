@@ -143,15 +143,39 @@ void BCH2D::DrawBands(const std::string& options)
 
     // set contour levels
     GetHistogram()->SetContour(levels.size(), &levels[0]);
-
-    if (fBandFillStyle <= 0) {
+    
+    /* Begin MPI MOD */
+    // if (fBandFillStyle <= 0) {
+    //     GetHistogram()->SetLineColor(GetLineColor());
+    //     GetHistogram()->Draw(Form("%scont%d", options.data(), static_cast<int>(std::abs(fBandFillStyle))));
+    // } else {
+    //     gStyle->SetPalette(colors.size(), &colors[0]);
+    //     GetHistogram()->SetFillStyle(fBandFillStyle);
+    //     GetHistogram()->Draw((options + "cont").data());
+    // }
+    /* HEPfit Note: Custom band styles for HEPfit. */
+    if (fBandFillStyle < 0) {
         GetHistogram()->SetLineColor(GetLineColor());
-        GetHistogram()->Draw(Form("%scont%d", options.data(), static_cast<int>(std::abs(fBandFillStyle))));
-    } else {
+        GetHistogram()->Draw((options + "cont2").data());
+    } else if (fBandFillStyle == 1001) {
         gStyle->SetPalette(colors.size(), &colors[0]);
         GetHistogram()->SetFillStyle(fBandFillStyle);
-        GetHistogram()->Draw((options + "cont").data());
+        GetHistogram()->Draw((options + "col").data());
+    } else if (fBandFillStyle == 101) {
+        gStyle->SetPalette(colors.size(), &colors[0]);
+        // GetHistogram()->SetFillStyle(1001);
+        GetHistogram()->DrawClone("cont4");
+    } else if (fBandFillStyle == 1) {
+        gStyle->SetPalette(colors.size(), &colors[0]);
+        GetHistogram()->SetFillStyle(0);
+        GetHistogram()->Draw((options + "cont1").data());
+    } else {
+        gStyle->SetPalette(colors.size(), &colors[0]);
+        GetHistogram()->SetFillStyle(1001);
+        GetHistogram()->Draw((options + "cont0").data());
     }
+    /* End MPI MOD */
+    
     gPad->Update();
 
     // Set legend entries

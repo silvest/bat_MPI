@@ -25,6 +25,7 @@
 #include "BCVariable.h"
 
 #include <limits>
+#include <memory>
 
 class TRandom;
 class BCPrior;
@@ -88,12 +89,12 @@ public:
 
     /**
      * @return prior object*/
-    virtual BCPrior* GetPrior()
+  virtual std::shared_ptr<BCPrior> GetPrior()
     { return fPrior;}
 
     /**
      * @return prior object*/
-    virtual const BCPrior* GetPrior() const
+  virtual const std::shared_ptr<BCPrior> GetPrior() const
     { return fPrior;}
 
     /**
@@ -148,7 +149,7 @@ public:
 
     /**
      * Set prior. Parameter will own prior! */
-    virtual void SetPrior(BCPrior* const prior);
+  virtual void SetPrior(std::shared_ptr<BCPrior> const prior);
 
     /**
      * Set constant prior. */
@@ -171,7 +172,7 @@ private:
     double fFixedValue;
 
     /// prior
-    BCPrior* fPrior;
+  std::shared_ptr<BCPrior> fPrior;
 
 };
 #endif

@@ -9,7 +9,7 @@
 #include "BCPositiveDefinitePrior.h"
 
 // ---------------------------------------------------------
-BCPositiveDefinitePrior::BCPositiveDefinitePrior(BCPrior* prior)
+BCPositiveDefinitePrior::BCPositiveDefinitePrior(std::shared_ptr<BCPrior> prior)
     : BCPrior(),
       fPrior(prior)
 {
@@ -18,14 +18,14 @@ BCPositiveDefinitePrior::BCPositiveDefinitePrior(BCPrior* prior)
 // ---------------------------------------------------------
 BCPositiveDefinitePrior::BCPositiveDefinitePrior(const BCPositiveDefinitePrior& other)
     : BCPrior(other),
-      fPrior(other.fPrior->Clone())
+      fPrior(other.fPrior)
 {
 }
 
 // ---------------------------------------------------------
 BCPositiveDefinitePrior::~BCPositiveDefinitePrior()
 {
-    delete fPrior;
+  fPrior.reset();
 }
 
 // ---------------------------------------------------------

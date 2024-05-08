@@ -110,13 +110,16 @@ void BCAux::MakeFinite(double& xmin, double& xmax)
 // ---------------------------------------------------------
 std::string BCAux::SafeName(const std::string& name)
 {
-    std::string res(name);
-    for (std::string::iterator it = res.begin(); it != res.end(); ) {
-        if (!BCAux::AllowedCharacter(*it))
-            res.erase(it);
-        else
-            it++;
-    }
+    // -- Beging Modification -- 
+    std::string res = "";
+    for (auto ch : name) {
+        if (::isalnum(ch) || ch == '_')
+            res += ch;
+    } 
+    // -- End Modification --
+    // These lines are commented out as ptr_fun is deprecated from c++11 and removed from c++17
+    // std::string res(name);
+    // res.erase(std::remove_if(res.begin(), res.end(), std::not1(std::ptr_fun(BCAux::AllowedCharacter))), res.end());
     return res;
 }
 

@@ -1321,26 +1321,28 @@ public:
      * @return Whether proposed point was accepted (true) or previous point was kept (false). */
     bool GetNewPointMetropolis();
 
+    /* Begin MPI MOD */
     /**
      * Generate a new point using the Metropolis algorithm for one chain.
      * @param chain chain index
      * @return Whether proposed point was accepted (true) or previous point was kept (false). */
-    bool GetNewPointMetropolis(unsigned chain);
+    bool GetChosenNewPointMetropolis();
 
     /**
      * Generate a new point using the Metropolis algorithm for one chain, varying only one parameter's value.
      * @param chain Chain index
      * @param parameter Index of single parameter to update.
      * @return Whether proposed point was accepted (true) or previous point was kept (false). */
-    bool GetNewPointMetropolis(unsigned chain, unsigned parameter);
+    bool GetChosenNewPointMetropolis(unsigned parameter);
 
     /**
      * Accept or rejects a point for a chain and updates efficiency.
      * @param chain chain index
      * @param parameter index of parameter to update efficiency for
      * @return Whether proposed point was accepted (true) or previous point was kept (false). */
-    bool AcceptOrRejectPoint(unsigned chain, unsigned parameter);
-
+    bool AcceptOrRejectPoint(unsigned parameter);
+    /* End MPI MOD */
+    
     /**
      * Fill marginalized distributions from a chain state*/
     void InChainFillHistograms(const ChainState& cs);
@@ -1362,6 +1364,14 @@ public:
      * @param parameters Parameter set to evaluate at.
      * @return natural logarithm of the function to map with MCMC */
     virtual double LogEval(const std::vector<double>& parameters) = 0;
+    
+    /* Begin MPI MOD */
+    /**
+     * Needs to be overloaded in the derived class.
+     * @param parameters Parameter set to evaluate at.
+     * @return natural logarithm of the APrioriProbability. */
+    virtual double LogAPrioriProbability(const std::vector<double>& parameters) = 0;
+    /* End MPI MOD */
 
     /**
      * Runs Metropolis algorithm.
@@ -1525,6 +1535,9 @@ public:
     void UpdateChainIndex(int chain);
 
     /** @} */
+    /* Begin MPI MOD */
+    int procnum;
+    /* End MPI MOD */
 
 private:
 

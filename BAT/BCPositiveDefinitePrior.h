@@ -39,7 +39,7 @@ public:
 
     /**
      * Constructor */
-    BCPositiveDefinitePrior(BCPrior* prior);
+  BCPositiveDefinitePrior(std::shared_ptr<BCPrior> prior);
 
     /**
      * Copy constructor */
@@ -65,10 +65,10 @@ public:
     /** \name Access to wrapped prior. */
     /** @{ */
 
-    BCPrior* Prior()
+  std::shared_ptr<BCPrior> Prior()
     { return fPrior; }
 
-    const BCPrior* Prior() const
+  const std::shared_ptr<BCPrior> Prior() const
     { return fPrior; }
 
     /** @} */
@@ -93,8 +93,8 @@ public:
 
     /**
      * Clone function */
-    virtual BCPrior* Clone() const
-    { return new BCPositiveDefinitePrior(*this); }
+  //    virtual BCPrior* Clone() const
+  //  { return new BCPositiveDefinitePrior(*this); }
 
     /**
      * @return Whether everything needed for prior is set and prior can be used. */
@@ -201,7 +201,7 @@ public:
 protected:
 
     /// Prior that is cut to positive values
-    BCPrior* fPrior;
+  std::shared_ptr<BCPrior> fPrior;
 
 };
 

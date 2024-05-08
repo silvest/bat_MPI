@@ -62,7 +62,7 @@ void BCLog::OpenLog(const std::string& filename, BCLog::LogLevel loglevelfile, B
     BCLog::SetLogLevelFile(loglevelfile);
     BCLog::SetLogLevelScreen(loglevelscreen);
 
-    BCLog::Out(BCLog::summary, BCLog::summary, "Opening logfile " + filename);
+    if (fPrefix) BCLog::Out(BCLog::summary, BCLog::summary, "Opening logfile " + filename);
 }
 
 // ---------------------------------------------------------

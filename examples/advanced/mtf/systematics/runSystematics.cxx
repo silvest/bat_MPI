@@ -98,9 +98,9 @@ int main()
 
     // set priors
     m.GetParameter("signal").SetPriorConstant();
-    m.GetParameter("background").SetPrior(new BCGaussianPrior(300., 30.));
-    m.GetParameter("systematic1").SetPrior(new BCGaussianPrior(0., 1.));
-    m.GetParameter("systematic2").SetPrior(new BCGaussianPrior(0., 1.));
+    m.GetParameter("background").SetPrior(std::make_shared<BCGaussianPrior>(300., 30.));
+    m.GetParameter("systematic1").SetPrior(std::make_shared<BCGaussianPrior>(0., 1.));
+    m.GetParameter("systematic2").SetPrior(std::make_shared<BCGaussianPrior>(0., 1.));
 
     // run MCMC
     m.MarginalizeAll(BCIntegrate::kMargMetropolis);

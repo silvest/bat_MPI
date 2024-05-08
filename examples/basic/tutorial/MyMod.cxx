@@ -25,10 +25,10 @@ MyMod::MyMod(const std::string& name)
 
     // add parameters for Gaussian distribution
     AddParameter("mu",    5.27, 5.29, "#mu", "[GeV]");
-    GetParameters().Back().SetPrior(new BCGaussianPrior(5.28, 2e-3));
+    GetParameters().Back().SetPrior(std::make_shared<BCGaussianPrior>(5.28, 2e-3));
 
     AddParameter("sigma", 25e-3, 45e-3, "#sigma", "[GeV]");
-    GetParameters().Back().SetPrior(new BCGaussianPrior(35e-3, 3e-3));
+    GetParameters().Back().SetPrior(std::make_shared<BCGaussianPrior>(35e-3, 3e-3));
 
     AddParameter("height", 0, 10, "", "[events]");
     GetParameters().Back().SetPriorConstant();

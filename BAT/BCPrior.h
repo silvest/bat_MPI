@@ -39,6 +39,7 @@
 #include <cstddef>
 #include <cmath>
 #include <limits>
+#include <memory>
 
 class TH1;
 class TH2;
@@ -87,7 +88,7 @@ public:
 
     /**
      * Clone function. [Copy constructor must also be provided.] */
-    virtual BCPrior* Clone() const = 0;
+    //virtual BCPrior* Clone() const = 0;
     // { return new [Derived Class](*this); }
 
     /**
@@ -283,14 +284,14 @@ public:
      * @param bins pointer to TH2 object defining binning to use (and axis names)
      * @param name name to give histogram created for BCH2D object
      * @return BCH2D object for prior. */
-    virtual BCH2D GetBCH2D(BCPrior* ordinate, TH2* bins, const std::string& name = "prior");
+  virtual BCH2D GetBCH2D(std::shared_ptr<BCPrior> ordinate, TH2* bins, const std::string& name = "prior");
 
     /** @} **/
 
 protected:
     TF1 fPriorFunction; ///< TF1 for use in default raw moment calculation
 
-    double fLogIntegral; ///< Log of integral of unnormalized pdf over the range.
+    double fLogIntegral=0.; ///< Log of integral of unnormalized pdf over the range.
 };
 
 #endif

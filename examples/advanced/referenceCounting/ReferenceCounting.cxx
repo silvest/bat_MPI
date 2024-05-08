@@ -24,8 +24,8 @@ ReferenceCounting::ReferenceCounting(const std::string& name, unsigned nobs)
 // ---------------------------------------------------------
 bool ReferenceCounting::SetPrior(ReferenceCounting::EvalOption option, double shape, double rate)
 {
-    RefPrior* refprior = new RefPrior(shape, rate);
-    GammaDistPrior* conjprior = new GammaDistPrior(shape, rate); // Poisson conjugate prior := Gamma Distribution
+  std::shared_ptr<RefPrior> refprior = std::make_shared<RefPrior>(shape, rate);
+  std::shared_ptr<GammaDistPrior> conjprior = std::make_shared<GammaDistPrior>(shape, rate); // Poisson conjugate prior := Gamma Distribution
 
     // if analytic, use prior objects
     if (option == kAnalytic) {
@@ -40,7 +40,7 @@ bool ReferenceCounting::SetPrior(ReferenceCounting::EvalOption option, double sh
         refprior->FillHistogramByCenterValue(h_s);
 
         // don't need analytic refprior anymore
-        delete refprior;
+        refprior.reset();
 
         if (option == kHistogram) {
 
@@ -48,15 +48,15 @@ bool ReferenceCounting::SetPrior(ReferenceCounting::EvalOption option, double sh
             TH1* h_b = GetParameter("b").CreateH1("hist_prior_b");
             conjprior->FillHistogramByCenterValue(h_b);
             // don't need analytic conjugate prior anymore
-            delete conjprior;
+            conjprior.reset();
 
-            GetParameter("s").SetPrior(new BCTH1Prior(h_s));
-            GetParameter("b").SetPrior(new BCTH1Prior(h_b));
+            GetParameter("s").SetPrior(std::make_shared<BCTH1Prior>(h_s));
+            GetParameter("b").SetPrior(std::make_shared<BCTH1Prior>(h_b));
 
         } else if (option == kApprox) {
 
             // Create TF1 prior for signal and fit it to histogram created above
-            GetParameter("s").SetPrior(new BCTF1Prior("sqrt(([0]*exp([1]*x^0.125))/(x+[0]*exp([1]*x^0.125)))",
+	  GetParameter("s").SetPrior(std::make_shared<BCTF1Prior>("sqrt(([0]*exp([1]*x^0.125))/(x+[0]*exp([1]*x^0.125)))",
                                        h_s->GetXaxis()->GetXmin(), h_s->GetXaxis()->GetXmax()));
             h_s->Fit(&GetParameter("s").GetPrior()->GetFunction());
             delete h_s;
@@ -64,7 +64,7 @@ bool ReferenceCounting::SetPrior(ReferenceCounting::EvalOption option, double sh
             GetParameter("b").SetPrior(conjprior);
 
         } else {
-            delete conjprior;
+	  conjprior.reset();
             return false;
         }
     }

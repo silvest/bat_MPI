@@ -201,7 +201,7 @@ void BCHistogramBase::SetHistogram(const TH1* const hist)
         return;
     }
 
-    fHistogram = BCAux::OwnClone(hist, Form("%s_bch", hist->GetName()));
+    fHistogram = BCAux::OwnClone(hist, Form("%s", hist->GetName()));
     fHistogram->SetStats(false);
     fHistogram->SetDirectory(0);
     fDimension = fHistogram->GetDimension();
@@ -742,6 +742,8 @@ void BCHistogramBase::DrawLegend()
         ymin = pow(10, ymin);
         ymax = pow(10, ymax);
     }
+
+    fHistogram->GetYaxis()->SetRangeUser(ymin, ymax * (1.15 + fLegend.GetTextSize()*fLegend.GetNRows()) * 1.05);
 
     gPad->SetTopMargin(0.02);
 

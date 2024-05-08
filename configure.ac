@@ -1,4 +1,4 @@
-AC_INIT([BAT], 1.0.0, [], [BAT])
+AC_INIT([BAT],[1.0.0],[],[BAT])
 : ${CXXFLAGS=""}
 : ${CFLAGS=""}
 : ${FFLAGS=""}
@@ -7,7 +7,15 @@ AM_CONFIG_HEADER(config.h)
 AC_LANG(C++)
 AC_PROG_CXX
 LT_INIT
-AC_HEADER_STDC
+m4_warn([obsolete],
+[The preprocessor macro 'STDC_HEADERS' is obsolete.
+  Except in unusual embedded environments, you can safely include all
+  C89 headers unconditionally.])dnl
+# Autoupdate added the next two lines to ensure that your configure
+# script's behavior did not change.  They are probably safe to remove.
+AC_CHECK_INCLUDES_DEFAULT
+AC_PROG_EGREP
+
 AC_FUNC_UTIME_NULL
 
 # autoconf and libtool macros will be copied to m4/
@@ -406,8 +414,7 @@ AC_DEFINE_UNQUOTED([BAT_TESTDIR], "$ac_pwd/test/", [Absolute path to the test di
 
 AC_SUBST(BAT_MANUAL_PDF, BAT-manual.pdf)
 
-AC_OUTPUT(
-  Makefile
+AC_CONFIG_FILES([Makefile
   bat.pc
   bat-config
   test-env.sh
@@ -443,4 +450,5 @@ AC_OUTPUT(
   doc/Makefile
   doc/manual/Makefile
   doc/ref-guide/Makefile
-)
+])
+AC_OUTPUT

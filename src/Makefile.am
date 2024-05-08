@@ -51,6 +51,7 @@ incs= \
 	\
 	BCConstantPrior.h \
 	BCGaussianPrior.h \
+	BCCombinedPrior.h \
 	BCSplitGaussianPrior.h \
 	BCCauchyPrior.h \
 	BCObservable.h \

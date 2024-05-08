@@ -35,8 +35,8 @@ CombinationModel::CombinationModel(const std::string& name,
                  "#sigma", "[ab]");
 
     // set priors
-    GetParameter("mass").SetPrior(new BCPositiveDefinitePrior(new BCGaussianPrior(old_mass_mean, old_mass_sigma)));
-    GetParameter("xs").SetPrior(new BCPositiveDefinitePrior(new BCGaussianPrior(old_xs_mean, old_xs_sigma)));
+    GetParameter("mass").SetPrior(std::make_shared<BCPositiveDefinitePrior>(std::make_shared<BCGaussianPrior>(old_mass_mean, old_mass_sigma)));
+    GetParameter("xs").SetPrior(std::make_shared<BCPositiveDefinitePrior>(std::make_shared<BCGaussianPrior>(old_xs_mean, old_xs_sigma)));
 }
 
 // ---------------------------------------------------------

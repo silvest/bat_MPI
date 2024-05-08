@@ -25,3 +25,12 @@ BCTF1Prior::BCTF1Prior(const std::string& formula, double xmin, double xmax)
 {
     fPriorFunction = TF1("f1_prior", formula.c_str(), xmin, xmax);
 }
+
+// ---------------------------------------------------------
+BCTF1Prior::BCTF1Prior(const std::string& formula, std::vector<double>& pars, double xmin, double xmax)
+    : BCPrior()
+{
+    fPriorFunction = TF1("f1_prior", formula.c_str(), xmin, xmax);
+    for (unsigned i = 0; i < pars.size(); ++i)
+        fPriorFunction.SetParameter(i, pars[i]);
+}
