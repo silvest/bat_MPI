@@ -70,6 +70,7 @@ BCEngineMCMC::BCEngineMCMC(const std::string& name)
       fMultivariateCovarianceUpdateLambda(0.5),
       fMultivariateEpsilon(0.05),
       fMultivariateScaleMultiplier(1.5),
+      fMCMCNIterationsPreRunFactorized(0),
       fMCMCEfficiencyMin(0.15),
       fMCMCEfficiencyMax(0.35),
       fInitialPositionScheme(BCEngineMCMC::kInitRandomUniform),
@@ -108,6 +109,7 @@ BCEngineMCMC::BCEngineMCMC(const std::string& filename, const std::string& name,
       fMultivariateCovarianceUpdateLambda(0.5),
       fMultivariateEpsilon(5.e-2),
       fMultivariateScaleMultiplier(1.5),
+      fMCMCNIterationsPreRunFactorized(0),
       fMCMCEfficiencyMin(0.15),
       fMCMCEfficiencyMax(0.35),
       fInitialPositionScheme(BCEngineMCMC::kInitRandomUniform),
@@ -145,6 +147,7 @@ BCEngineMCMC::BCEngineMCMC(const BCEngineMCMC& other)
       fMCMCNLag(other.fMCMCNLag),
       fMCMCCurrentIteration(other.fMCMCCurrentIteration),
       fMCMCNIterationsPreRunCheck(other.fMCMCNIterationsPreRunCheck),
+      fMCMCNIterationsPreRunFactorized(other.fMCMCNIterationsPreRunFactorized),
       fMCMCPreRunCheckClear(other.fMCMCPreRunCheckClear),
       fMCMCNIterationsConvergenceGlobal(other.fMCMCNIterationsConvergenceGlobal),
       fMCMCNIterationsPreRunMax(other.fMCMCNIterationsPreRunMax),
@@ -223,6 +226,7 @@ BCEngineMCMC& BCEngineMCMC::operator=(const BCEngineMCMC& other)
         fMCMCNLag = other.fMCMCNLag;
         fMCMCCurrentIteration = other.fMCMCCurrentIteration;
         fMCMCNIterationsPreRunCheck = other.fMCMCNIterationsPreRunCheck;
+        fMCMCNIterationsPreRunFactorized = other.fMCMCNIterationsPreRunFactorized;
         fMCMCPreRunCheckClear = other.fMCMCPreRunCheckClear;
         fMCMCNIterationsConvergenceGlobal = other.fMCMCNIterationsConvergenceGlobal;
         fMCMCNIterationsPreRunMax = other.fMCMCNIterationsPreRunMax;
@@ -869,8 +873,8 @@ void BCEngineMCMC::UpdateParameterTree()
             b_nchains->Fill();
 
         for (unsigned j = 0; j < nchains; ++j) {
-            scale[j] = (n < GetNParameters()) ? (fMCMCProposeMultivariate ? fMCMCProposalFunctionScaleFactor[j][0] : fMCMCProposalFunctionScaleFactor[j][n]) : -1;
-            if (!fMCMCProposeMultivariate)
+            scale[j] = (n < GetNParameters()) ? ((fMCMCProposeMultivariate && fMCMCCurrentIteration >= fMCMCNIterationsPreRunFactorized) ? fMCMCProposalFunctionScaleFactor[j][0] : fMCMCProposalFunctionScaleFactor[j][n]) : -1;
+            if (!fMCMCProposeMultivariate || fMCMCCurrentIteration < fMCMCNIterationsPreRunFactorized)
                 eff[j]   = (n < GetNParameters()) ? fMCMCStatistics[j].efficiency[n] : -1;
             else if (!fMCMCStatistics[j].efficiency.empty())
                 eff[j] = fMCMCStatistics[j].efficiency.front();
@@ -1628,7 +1632,7 @@ bool BCEngineMCMC::AcceptOrRejectPoint(unsigned parameter)
         ++fMCMCStates[mychain].iteration;
         
         // get proposal point (0 for multivariate proposal)
-        if (fMCMCProposeMultivariate) valid = GetProposalPointMetropolis(mychain, fMCMCThreadLocalStorage[mychain].parameters);
+        if (fMCMCProposeMultivariate && fMCMCCurrentIteration >= fMCMCNIterationsPreRunFactorized) valid = GetProposalPointMetropolis(mychain, fMCMCThreadLocalStorage[mychain].parameters);
         else valid = GetProposalPointMetropolis(mychain, parameter, fMCMCThreadLocalStorage[mychain].parameters);
         
         if (valid) {
@@ -1721,7 +1725,7 @@ bool BCEngineMCMC::GetNewPointMetropolis()
 {
     bool return_value = true;
 
-    if (!fMCMCProposeMultivariate) {
+    if (!fMCMCProposeMultivariate || fMCMCCurrentIteration < fMCMCNIterationsPreRunFactorized) {
         /* run over parameters one at a time */
 
         for (unsigned ipar = 0; ipar < GetNParameters(); ++ipar) {
@@ -1834,6 +1838,7 @@ bool BCEngineMCMC::MetropolisPreRun()
     // initialize Markov chain
     MCMCInitialize();
 
+    bool first_iteration_multivariate = true;
     if (!fMCMCOutputFile && fMCMCFlagWritePreRunToFile) // HEPfit Note: Modification required to access Root tree from HEPfit consistently.
         InitializeMarkovChainTree();
 
@@ -1846,7 +1851,9 @@ bool BCEngineMCMC::MetropolisPreRun()
     fMultivariateProposalFunctionCholeskyDecomposition.clear();
 
     if (fMCMCProposeMultivariate) {
+
         // multivariate proposal function
+        BCLog::OutSummary(Form(" --> Using multivariate proposal function after  %i iterations of individual scale adjustment", fMCMCNIterationsPreRunFactorized));
 
         // suppress ROOT errors about Cholesky decomposition
         gErrorIgnoreLevel = kBreak;
@@ -1908,7 +1915,7 @@ bool BCEngineMCMC::MetropolisPreRun()
                 || (fMCMCNChains > 1 && fMCMCNIterationsConvergenceGlobal < 0))) {
 
         // Generate (nIterationsCheckConvergence) new points in each chain
-        for (unsigned i = 0; i < nIterationsPreRunCheck && fMCMCCurrentIteration < (int)fMCMCNIterationsPreRunMax; ++i) {
+        for (unsigned i = 0; i < ((fMCMCProposeMultivariate && fMCMCCurrentIteration < fMCMCNIterationsPreRunFactorized) ? nIterationsPreRunCheck / GetParameters().GetNFreeParameters() : nIterationsPreRunCheck ) && fMCMCCurrentIteration < (int)fMCMCNIterationsPreRunMax; ++i) {
             // get new point & calculate observables
             GetNewPointMetropolis();
             EvaluateObservables();
@@ -1931,7 +1938,7 @@ bool BCEngineMCMC::MetropolisPreRun()
 
         for (unsigned c = 0; c < fMCMCNChains; ++c) {
 
-            if (fMCMCProposeMultivariate) { // multivariate proposal function, one efficiency per chain
+            if (fMCMCProposeMultivariate && fMCMCCurrentIteration >= fMCMCNIterationsPreRunFactorized) { // multivariate proposal function, one efficiency per chain
 
                 if (fMCMCStatistics[c].efficiency[0] >= fMCMCEfficiencyMin && fMCMCStatistics[c].efficiency[0] <= fMCMCEfficiencyMax)
                     continue; // since chain efficiency is in range,
@@ -1940,7 +1947,14 @@ bool BCEngineMCMC::MetropolisPreRun()
                     BCLog::OutDetail(Form("     * Efficiency status: Efficiencies not within predefined range after %i iterations. Efficiency of ", fMCMCCurrentIteration));
                 allEfficient = false;
 
-                double oldScale = fMCMCProposalFunctionScaleFactor[c][0];
+                double oldScale; 
+                
+                if(first_iteration_multivariate){
+                    oldScale = 1.;
+                    first_iteration_multivariate = false;
+                }
+                else
+                    oldScale=fMCMCProposalFunctionScaleFactor[c][0];
 
                 if (fMCMCStatistics[c].efficiency[0] < fMCMCEfficiencyMin) { // efficiency too low... decrease scale factor
                     fMCMCProposalFunctionScaleFactor[c][0] /= fMultivariateScaleMultiplier;
@@ -2133,7 +2147,7 @@ bool BCEngineMCMC::MetropolisPreRun()
     for (unsigned c = 0; c < fMCMCNChains; ++c)
         fMCMCStatistics_AllChains += fMCMCStatistics[c];
 
-    if (fMCMCProposeMultivariate) {
+    if (fMCMCProposeMultivariate && fMCMCCurrentIteration >= fMCMCNIterationsPreRunFactorized) {
         BCLog::OutDetail(Form(" --> Scale factors and efficiencies (measured in last %u iterations):", fMCMCStatistics.front().n_samples_efficiency));
         BCLog::OutDetail("       - Chain : Scale factor    Efficiency");
         for (unsigned c = 0; c < fMCMCNChains; ++c)
@@ -2486,7 +2500,7 @@ void BCEngineMCMC::MCMCInitialize()
     CreateHistograms(false);
 
     // set scale factors
-    if (fMCMCProposeMultivariate) {
+    if (fMCMCProposeMultivariate && fMCMCNIterationsPreRunFactorized == 0) {
         // if multivariate
 
         // if only one scale factor is set, use for all chains

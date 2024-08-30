@@ -329,6 +329,12 @@ public:
     { return fMCMCNIterationsPreRunCheck; }
 
     /**
+     * @return number of iterations with individual parameter adjustments before switching
+     * to multivariate proposal function. */
+    unsigned GetNIterationsPreRunFactorized() const
+    { return fMCMCNIterationsPreRunFactorized; }
+
+    /**
      * @return number of iterations between clearings of statistics for convergence checking. */
     unsigned GetPreRunCheckClear()
     { return fMCMCPreRunCheckClear; }
@@ -799,6 +805,12 @@ public:
      * convergence checks in the pre-run. */
     void SetNIterationsPreRunCheck(unsigned n)
     { fMCMCNIterationsPreRunCheck = n; }
+
+    /**
+     * Sets the number of iterations with individual parameter adjustments before switching
+     * to multivariate proposal function. */
+    void SetNIterationsPreRunFactorized(unsigned n)
+    { fMCMCNIterationsPreRunFactorized = n; }
 
     /**
      * Sets the number of prerun checks to make inbetween statistics clearing. */
@@ -1634,6 +1646,11 @@ protected:
      * Number of iterations between scale adjustments and convergence
      * checks in pre-run. */
     unsigned fMCMCNIterationsPreRunCheck;
+
+    /**
+     * Number of iterations with individual parameter adjustment before starting the
+     * multivariate proposal function. */
+    unsigned fMCMCNIterationsPreRunFactorized;
 
     /**
      * Number of iterations between clearing of convergence stats in pre-run.*/
