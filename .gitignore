@@ -3,14 +3,12 @@ aclocal.m4
 *.cache
 compile
 config/
-config.*
 .deps/
 depcomp
 install-sh
 libtool
 *.d
 *.log
-ltmain.sh
 m4/
 Makefile
 /Makefile.in
