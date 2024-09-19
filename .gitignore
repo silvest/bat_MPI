@@ -3,6 +3,8 @@ aclocal.m4
 *.cache
 compile
 config/
+config.h
+config.h.in
 .deps/
 depcomp
 install-sh
