@@ -3,7 +3,6 @@ aclocal.m4
 *.cache
 config/
 config.h
-config.h.in
 .deps/
 depcomp
 libtool
@@ -13,7 +12,6 @@ m4/
 Makefile
 stamp-h1
 *.status
-/test-driver
 
 /examples/Makefile.in
 /examples/*/Makefile.in
