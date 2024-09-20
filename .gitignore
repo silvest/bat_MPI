@@ -4,7 +4,6 @@ aclocal.m4
 config/
 config.h
 .deps/
-depcomp
 libtool
 *.d
 *.log
