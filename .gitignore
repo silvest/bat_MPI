@@ -13,10 +13,6 @@ Makefile
 stamp-h1
 *.status
 
-/examples/Makefile.in
-/examples/*/Makefile.in
-/examples/*/*/Makefile.in
-/examples/*/*/*/Makefile.in
 
 # separate build subdirectory
 build*/
