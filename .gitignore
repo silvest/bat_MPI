@@ -16,7 +16,6 @@ Makefile
 /models/base/Makefile.in
 /models/mtf/Makefile.in
 /src/Makefile.in
-missing
 stamp-h1
 *.status
 /test-driver
