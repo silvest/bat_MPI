@@ -11,11 +11,6 @@ libtool
 *.log
 m4/
 Makefile
-/Makefile.in
-/test/Makefile.in
-/models/base/Makefile.in
-/models/mtf/Makefile.in
-/src/Makefile.in
 stamp-h1
 *.status
 /test-driver
