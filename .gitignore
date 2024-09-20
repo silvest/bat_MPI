@@ -8,7 +8,6 @@ depcomp
 libtool
 *.d
 *.log
-m4/
 Makefile
 stamp-h1
 *.status
