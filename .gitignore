@@ -14,6 +14,9 @@ stamp-h1
 # separate build subdirectory
 build*/
 
+# examples
+examples/basic/tutorial/runMyTut
+
 # ROOT
 *_rdict.*
 *.rootmap
