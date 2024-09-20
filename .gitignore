@@ -13,7 +13,6 @@ Makefile
 stamp-h1
 *.status
 
-
 # separate build subdirectory
 build*/
 
@@ -47,7 +46,6 @@ doc/introduction/versions.tex
 
 *.el
 *.aux
-doc/ref-guide/*
 !doc/ref-guide/Makefile.am
 
 # Editors
