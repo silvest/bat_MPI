@@ -1,5 +1,4 @@
 # Autotools
-aclocal.m4
 *.cache
 config/
 config.h
