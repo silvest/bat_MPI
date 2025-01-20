@@ -3975,8 +3975,10 @@ void BCEngineMCMC::Statistics::Update(const ChainState& cs)
     // update covariances
     if (n_samples > 1) {
         for (unsigned i = 0; i < mean.size(); ++i)
-            for (unsigned j = i; j < mean.size(); ++j)
+            for (unsigned j = i; j < mean.size(); ++j) {
                 covariance[i][j] += delta[i] * delta[j] / n_samples - covariance[i][j] / (n_samples - 1);
+                covariance[j][i] = covariance[i][j];
+            }
     }
     // update stderrors
     for (unsigned i = 0; i < modepar.size(); ++i)
