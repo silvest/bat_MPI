@@ -34,8 +34,15 @@ See `doc/COPYING` and `doc/LICENSE` for licensing details.
 Documentation
 -------------
 
-For **installation instructions**, see the
-`INSTALL.md` file
+CMake is the primary build system. See [INSTALL.md](INSTALL.md) for dependencies,
+installation, exported CMake targets, optional features, tests and cluster setup.
+Autotools is deprecated and retained during the migration.
+
+```sh
+cmake -S . -B build-cmake -DCMAKE_INSTALL_PREFIX="$HOME/opt/bat-pt"
+cmake --build build-cmake -j 4
+cmake --install build-cmake
+```
 
 Contents
 ---------

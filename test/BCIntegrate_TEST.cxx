@@ -148,7 +148,7 @@ public:
         // chain can find either mode
         m.SetNIterationsPreRunMin(5000);
         m.SetRandomSeed(1346);
-        const double& mode = m.FindMode(BCIntegrate::kOptMetropolis).front();
+        const double mode = m.FindMode(BCIntegrate::kOptMetropolis).front();
         const double target = mode > 0.5 ? 1.0 : 0.0;
         TEST_CHECK_NEARLY_EQUAL(mode, target, 1e-3);
 

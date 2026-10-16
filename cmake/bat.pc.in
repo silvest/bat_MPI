@@ -1,0 +1,8 @@
+prefix=${pcfiledir}/@BAT_PC_TO_PREFIX@
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+Name: bat
+Description: Bayesian Analysis Toolkit MPI fork with Parallel Tempering
+Version: @PROJECT_VERSION@
+Libs: -L${libdir} -Wl,-rpath,${libdir} @BAT_COMPAT_LIBS@ @BAT_COMPAT_DEP_LIBS@
+Cflags: -I${includedir} @BAT_COMPAT_CFLAGS@

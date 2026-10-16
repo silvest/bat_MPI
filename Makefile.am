@@ -94,3 +94,7 @@ install-data-hook:
 format:
 	cd $(top_srcdir) && \
 	astyle --options=tools/astylerc --formatted `find BAT/ benchmarks/ examples/ tools $(SUBDIRS) -name '*.C' -o -name '*.cxx' -o -name '*.h' | egrep -v -f tools/astyle-ignore`
+
+# Keep the primary CMake build available in legacy source distributions.
+EXTRA_DIST += CMakeLists.txt cmake models/base/CMakeLists.txt models/mtf/CMakeLists.txt \
+  test/CMakeLists.txt test/cmake doc/INSTALL_AUTOTOOLS.md

@@ -6,6 +6,7 @@
  */
 
 #include <test.h>
+#include <mpi.h>
 #include <BAT/BCLog.h>
 
 #include <cstdlib>
@@ -76,8 +77,9 @@ TestCaseFailedException::where() const
 }
 }
 
-int main(int, char** argv)
+int main(int argc, char** argv)
 {
+    MPI_Init(&argc, &argv);
     int result(EXIT_SUCCESS);
 
     // Extract the program name from argv[0]
@@ -108,5 +110,6 @@ int main(int, char** argv)
         }
     }
 
+    MPI_Finalize();
     return result;
 }

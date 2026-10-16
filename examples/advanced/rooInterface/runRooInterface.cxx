@@ -1,3 +1,4 @@
+#include "../../MPIEnvironment.h"
 #include <BAT/BCRooInterface.h>
 
 #include <BAT/BCH1D.h>
@@ -14,6 +15,7 @@
 
 int main(int argc, char** argv)
 {
+    BATExampleMPIEnvironment mpi;
     std::cout << "Running BAT via the BCRooInterface...\n";
 
     // retrieve the command line arguments

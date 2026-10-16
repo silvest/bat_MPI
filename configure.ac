@@ -1,4 +1,5 @@
 AC_INIT([BAT],[1.0.0],[],[BAT])
+AC_MSG_WARN([Autotools is deprecated for bat_MPI. Use cmake -S . -B build-cmake; see INSTALL.md.])
 : ${CXXFLAGS=""}
 : ${CFLAGS=""}
 : ${FFLAGS=""}

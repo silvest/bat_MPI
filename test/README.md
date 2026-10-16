@@ -1,3 +1,15 @@
+CMake workflow (primary)
+=======================
+
+Enable `BAT_BUILD_PT_TESTS`, `BAT_BUILD_INSTALL_TESTS`, and optionally
+`BAT_BUILD_LEGACY_TESTS`, then build and run `ctest --test-dir build-cmake
+--output-on-failure`. See [INSTALL.md](../INSTALL.md) for Python and MPI settings.
+Legacy tests run on one MPI process; their test framework initializes MPI.
+Add new unit targets in `test/CMakeLists.txt`. Test output stays in the build tree.
+
+Historical autotools workflow (deprecated)
+=========================================
+
 How to run unit tests
 =====================
 

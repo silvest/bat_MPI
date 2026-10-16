@@ -6,9 +6,17 @@
 // ***************************************************************
 
 #include <BAT/BCLog.h>
+#include <mpi.h>
+namespace {
+struct MPIEnvironment {
+    MPIEnvironment() { MPI_Init(nullptr, nullptr); }
+    ~MPIEnvironment() { MPI_Finalize(); }
+};
+}
 
 int main()
 {
+    MPIEnvironment mpi;
     // open log file
     BCLog::OpenLog("log.txt", BCLog::detail, BCLog::detail);
 

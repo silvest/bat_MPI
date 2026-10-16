@@ -1,259 +1,172 @@
-Installation instructions {#cha-install}
-=========================
-
-This document provides a short description of how to compile and use
-BAT on your computer.
-
-Platforms
-----------
-
-BAT has been developed on Linux. The installation, unit tests, and
-examples are run and known to work on Linux and Mac OS X. 
-
-Dependencies
--------------
-
-It is understood that all commands shown below are to be entered into
-a terminal.
-
-### Required: Basic tools
-
-Building and installing works with autoconf >= 2.63 and automake >= 1.10. To run
-the tests, a more recent automake version is needed, v1.15 is known to be
-sufficient. Alternatively, the core libraries can be build with CMake (recommended).
-
-### Required: ROOT
-
-ROOT is an object-oriented data-analysis framework. At http://root.cern.ch/, you
-can obtain the source code as well as binary distributions for a number of Linux
-distributions and Mac OS X versions. We advise to download the latest production
-release of ROOT. BAT is compatible with ROOT 6. 
-
-### Required: openMPI
-
-
-
-
-#### Note
-
-For the interface to RooFit/RooStats, ROOT must be compiled with
-support for RooFit and MathMore, the latter relies on the GNU
-scientific library (GSL).
-
-### Optional: Cuba
-
-Cuba is a library containing general-purpose multidimensional
-integration algorithms. It can be obtained from
-http://www.feynarts.de/cuba/. BAT is compatible with Cuba versions 3.3
-through at least 4.2.
-
-Cuba is not necessary to run BAT. We recommend it for model comparison
-where expensive integrals are needed. Cuba provides integration
-routines tuned for performance, which are useful for integration in
-problems with not too many dimensions (~10). By default, Cuba will
-evaluate in parallel and take all idle cores; the number of cores can
-be set through an environment variable. For a single core, set
-
-    CUBACORES=1
-
-The recommended way to get Cuba is to configure BAT with the option
-
-    --with-cuba=download
-
-This will download a compatible version of Cuba to the local subdirectory
-`external/cuba-VERSION`, compile it, and configure BAT to use it.
-
-If you want to compile Cuba manually, make sure it is built with
-position-independent code:
-
-    ./configure CFLAGS='-fPIC -O3 -fomit-frame-pointer -ffast-math -Wall'
-    make
-    make install
-
-Building
-----------------------
-
-### Obtaining BAT
-
-You can download the latest release of BAT from
-http://mpp.mpg.de/bat/.  Open a terminal, unpack the tarball usually
-named like BAT-x.x.tar.gz (here x.x is the version number) and switch
-to the directory
-
-    tar -xzf BAT-x.x.tar.gz
-    cd BAT-x.x
-
-Alternatively, you can clone the git repository https://github.com/bat/bat (we
-recommend using the master branch):
-
-    git clone https://github.com/bat/bat
-    cd bat
-    ./autogen.sh
-
-Now start the configuration with
-
-    ./configure
-
-This will check your system for all components needed to compile BAT
-and set up the paths for installation. You can add the option
-`--prefix=/path/to/install/bat` to `./configure`. The BAT library
-files will then be installed to `$prefix/lib` and the include files to
-`$prefix/include`. The default installation prefix is `/usr/local`,
-which requires super-user privileges.
-
-You can list all available options using
-
-    ./configure --help
-
-In the following, we describe the most useful options in detail.
-
-### ROOT
-
-The configure script checks for ROOT availability in the system and
-fails if ROOT is not installed. You can specify the `ROOTSYS` directory
-using `--with-rootsys=/path/to/rootsys`
-
-BAT support for RooFit/RooStats is turned off by default. The feature
-can be turned on explicitly with `--enable-roostats`. The configure
-script will check whether the version of ROOT is sufficient and
-whether ROOT was compiled with RooFit/RooStats support.
-
-### openMP
-
-Support for openMP threading to run multiple Markov chains in parallel
-is available through the configure option `--enable-parallel`;
-it is disabled by default. This requires a version of gcc accepting
-the `-fopenmp` flag, anything >= 4.2 should suffice.  Note that if
-threads are enabled, the default number of threads actually used is
-implementation dependent and may also depend on the current load of
-the CPU. Manual control over the number of threads is achieved
-entirely by openMP means such as setting the environment variable
-`OMP_NUM_THREADS` before running an executable.
-
-The default version of clang does not implement openMP.
-
-### Cuba
-
-If you configured BAT with the option `--with-cuba=download`, BAT will
-download, compile, and use Cuba automatically.  For manual
-configuration, use the configure option `--with-cuba[=DIR]` to enable
-Cuba. If you installed Cuba including the `partview` executable, the
-Cuba installation path will be derived from its location. Otherwise,
-the configure script will search for `libcuba.a` and `cuba.h` in the
-system paths. If you manually specify the Cuba install path as `DIR`,
-configure will look in `DIR/lib/` and `DIR/include/` instead.  For
-more fine-grained control, use
-`--with-cuba-include-dir=/path/to/cuba/header` and
-`--with-cuba-lib-dir=/path/to/cuba/lib`.
-
-### Advanced options
-
-If you want to be able to step through BAT line by line with a
-debugger, use `--enable-debug`. This slows down execution as it turns
-off code optimization but it improves the compilation time. Another
-way to speed up the build is to create only shared libraries if you
-don't need static libraries: `--disable-static`. Finally, you can
-reduce the output to the terminal with `--enable-silent-rules`.
-
-### Compile
-
-After a successful configuration, run
-
-    make
-    make install
-
-to compile and install BAT. Note that depending on the setting of the
-installation prefix you might need super-user privileges to be able to
-install BAT and run `sudo make install` instead of plain `make
-install`. In the former case, you might need to run `sudo ldconfig`
-just once to help the loader pick up the new libraries immediately.
-
-System setup
-------------
-
-After installation, BAT offers two mechanisms to make BAT available:
-
-1. The script `bat-config` returns details of the BAT installation
-   directories and compilation settings; see `bat-config`.
-
-2. The file `bat.pc` contains the same information as above and can be
-   used by the more powerful `pkg-config`; e.g.,
-
-        pkg-config --modversion bat
-        pkg-config --libs bat
-
-If you do not install BAT to the system directories, you need to
-manually add the path to `bat-config`, `bat.pc`, the libraries, and
-the include files to the search paths. Depending on your shell, the
-set of commands on linux for bash-compatible shells is
-
-    BATPREFIX="/bat/install/prefix"
-    export PATH="$BATPREFIX/bin:$PATH"
-    export LD_LIBRARY_PATH="$BATPREFIX/lib:$LD_LIBRARY_PATH"
-    export CPATH="$BATPREFIX/include:$CPATH"
-    export PKG_CONFIG_PATH="$BATPREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
-
-and for csh-compatible shells is
-
-    set BATPREFIX = /bat/install/prefix
-    setenv PATH              "${BATPREFIX}/bin:${PATH}"
-    setenv LD_LIBRARY_PATH   "${BATPREFIX}/lib:${LD_LIBRARY_PATH}"
-    setenv CPATH             "${BATPREFIX}/include:${CPATH}"
-    setenv PKG_CONFIG_PATH   "${BATPREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH}"
-
-If you want to make BAT permanently available, add the above commands
-to your login script, for example to `.profile` or to `.bashrc`.
-
-On Mac OS X you do not have to set up `LD_LIBRARY_PATH` because we use
-the `rpath` option to make BAT compatible with the SIP feature enabled
-by default on Mac OS X starting with El Capitan.
-
-Updating `$CPATH` is required if you work with interactive ROOT macros
-that use BAT (both for ROOT 5 and 6).
-
-The minimal setup does not require setting `PKG_CONFIG_PATH` to run
-BAT unless you want to integrate BAT into another probject using
-`pkg-config`. BAT itself does not use `pkg-config`.
-
-Including BAT in your project
------------------------------
-
-The most basic way to compile and link a file `example.cxx` with BAT is
-
-    gcc `bat-config --cflags` `bat-config --libs` example.cxx -o
-
-In a makefile, simply query `bat-config` to set appropriate
-variables. However, there will be an error at runtime, for example in
-interactive ROOT macros, if
-
-    libBAT.so, libBATmodels.so, libBATmtf.so,
-    libBAT.rootmap, libBATmodels.rootmap, libBATmtf.rootmap
-
-are not in the directories searched by the library loader; see above how
-to setup the `LD_LIBRARY_PATH` and the `CPATH`.
-
-Interactive ROOT macros
------------------------
-
-Due to problems in ROOT 6.02.00, it is important to create an instance
-of a BAT class before calling any free function defined in the BAT
-libraries. Else `cling` will emit confusing
-[error messages](https://github.com/bat/bat/issues/5). For example,
-the right order would be
-
-    int main() {
-        BCLog::OpenLog("log.txt");
-        BCAux::SetStyle();
-        ...
-    }
-
-instead of the other way around around because `OpenLog` creates a
-singleton object.
-
-Contact
--------
-
-Please consult the BAT web page http://mpp.mpg.de/bat/ for further
-information. In case of questions or problems, please don't hesitate
-to create an issue at https://github.com/bat/bat/issues/ or contact
-the authors directly via email through bat@mpp.mpg.de.
+# Build and install bat_MPI with CMake
+
+CMake is the primary build system for this MPI fork. Autotools is deprecated
+and retained temporarily; its historical instructions are in
+[doc/INSTALL_AUTOTOOLS.md](doc/INSTALL_AUTOTOOLS.md).
+
+## Dependencies
+
+Use CMake 3.16 or newer, a C++ compiler compatible with your ROOT build, ROOT 6.08
+or newer with MathMore/Minuit, and an MPI implementation such as OpenMPI. ROOT's
+required C++ standard is used by default. Use the same compiler, C++ runtime,
+ROOT and MPI installation for BAT and downstream applications. Python is optional
+and only needed for offline MCMC diagnostics and their tests.
+
+## Build
+
+```sh
+git clone https://github.com/silvest/bat_MPI.git
+cd bat_MPI
+cmake -S . -B build-cmake -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX="$HOME/opt/bat-pt"
+cmake --build build-cmake -j 4
+cmake --install build-cmake
+```
+
+For a nonstandard ROOT installation, pass `-DROOT_DIR=/path/to/root/lib/cmake/ROOT`
+or add its prefix to `CMAKE_PREFIX_PATH`. Select MPI with CMake's `MPI_CXX_COMPILER`
+or your module environment. A plain C++ compiler works: the exported BAT targets
+carry MPI include and link dependencies. Use separate build directories when
+changing ROOT, MPI, compiler, optional features or install layout. In-source builds
+are intentionally rejected so an old autotools `config.h` cannot affect CMake.
+
+The default build installs shared and static `BAT`, `BATmodels` and `BATmtf`
+libraries, public headers, ROOT dictionaries, the CMake package, compatibility
+`bat-config`/`bat.pc`, the `bat-project` generator and offline diagnostic scripts.
+GNUInstallDirs controls `lib` versus `lib64`. To use a consistent cluster prefix,
+configure explicitly with `-DCMAKE_INSTALL_LIBDIR=lib` if desired.
+
+## Options
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `BAT_BUILD_SHARED_LIBS` | ON | Shared libraries. |
+| `BAT_BUILD_STATIC_LIBS` | ON | Static libraries; at least one library form is required. |
+| `BAT_BUILD_MODELS` | ON | General fitters in `BATmodels`. |
+| `BAT_BUILD_MTF` | ON | Template fitters in `BATmtf`. |
+| `BAT_ENABLE_ROOSTATS` | OFF | RooFit/RooStats adapter in BATmodels; requires compatible ROOT RooFit/RooStats components. |
+| `BAT_ENABLE_CUBA` | OFF | Existing Cuba 3.3/4.x; pass `Cuba_ROOT` or `Cuba_INCLUDE_DIR`/`Cuba_LIBRARY`. No automatic downloads. |
+| `BAT_ENABLE_OPENMP` | OFF | Legacy OpenMP thread bookkeeping; MPI remains the sampler backend. |
+| `BAT_BUILD_PT_TESTS` | OFF | PT, transport and proposal-cache regression tests. |
+| `BAT_BUILD_INSTALL_TESTS` | OFF | Relocated installation, exported targets, bat-config and generated project tests. |
+| `BAT_BUILD_LEGACY_TESTS` | OFF | Upstream unit tests, running one MPI process. |
+| `BAT_BUILD_EXAMPLES` | OFF | Standalone C++ examples, running one MPI process. |
+| `BAT_BUILD_DOCS` | OFF | Enable `BAT_reference` Doxygen target. |
+
+The optional Cuba interface is detected by compilation; a requested feature with
+missing dependencies fails configuration. Unlike MPI, enabling the legacy OpenMP
+hooks does not parallelize likelihood evaluation across additional workers.
+Historical ROOT `.C` example macros and the LaTeX manual remain source resources;
+they are not automatically executed by the CMake build.
+
+## CMake consumers
+
+```cmake
+find_package(BAT 1 CONFIG REQUIRED COMPONENTS PT)
+add_executable(my_analysis main.cpp)
+target_link_libraries(my_analysis PRIVATE BAT::BAT)
+# Optional: BAT::BATmodels and BAT::BATmtf.
+set_property(TARGET my_analysis APPEND PROPERTY INSTALL_RPATH "${BAT_LIBRARY_DIR}")
+```
+
+Configure the consumer with `-DCMAKE_PREFIX_PATH="$HOME/opt/bat-pt"` or the exact
+`BAT_DIR` printed by installation (`lib/cmake/BAT` or `lib64/cmake/BAT`). Components
+`models`, `mtf`, `RooStats` and `PT` can be required explicitly. When both forms are
+built, the default targets select shared libraries; `BAT::BAT_static`,
+`BAT::BATmodels_static` and `BAT::BATmtf_static` select the static alternatives.
+With a static-only build, the default targets select static libraries. ROOT and
+MPI can still be shared dependencies in a static BAT build.
+
+Applications must call `MPI_Init` before constructing a BAT engine and destroy
+engines before `MPI_Finalize`. Existing upstream examples use one process and do
+not implement a distributed likelihood worker loop. A multi-process application
+must implement that protocol, as HEPfit and GoldenModes do.
+
+`BAT_HAS_PARALLEL_TEMPERING` and `BAT_HAS_TRANSPORT_DIAGNOSTICS` describe this fork's
+APIs. Headers and libraries must come from the same installation.
+
+## Existing consumers and cluster jobs
+
+`bat-config` supports `--prefix`, `--version`, `--cflags`, `--libs`, `--bindir`,
+`--incdir`, `--libdir`, and `--features`. Compile legacy consumers with `mpicxx`;
+`--libs` includes an explicit BAT runtime search path. `bat.pc` supports
+pkg-config consumers. The preferred CMake package propagates dependencies directly.
+
+GoldenModes now prefers `find_package(BAT CONFIG)` and preserves the chosen BAT
+runtime path in installed `mainGM`. Its explicit `BAT_SOURCE_DIR`/`BAT_LIBRARY`
+mode and the bat-config fallback remain available. Use a fresh build directory:
+
+```sh
+cmake -S /path/to/ThErrorsInGoldenModes -B /path/to/ThErrorsInGoldenModes/build-cmake \
+  -DCMAKE_PREFIX_PATH="$HOME/opt/bat-pt" \
+  -DCMAKE_INSTALL_PREFIX=/path/to/ThErrorsInGoldenModes/dist
+cmake --build /path/to/ThErrorsInGoldenModes/build-cmake -j 4
+cmake --install /path/to/ThErrorsInGoldenModes/build-cmake
+cmake -S /path/to/HEPfit -B /path/to/HEPfit/build-pt \
+  -DMPIBAT=ON -DBAT_INSTALL=OFF -DBAT_INSTALL_DIR="$HOME/opt/bat-pt" \
+  -DRGESOLVER_CONFIG_DIR=/path/to/RGESolver/bin
+cmake --build /path/to/HEPfit/build-pt --target analysis -j 4
+```
+
+On Linux, an old BAT directory in `LD_LIBRARY_PATH` can override executable
+RUNPATH. Set the correct environment in the submitted job script on every node,
+not only in the login shell, and check the installed executable:
+
+```sh
+export PATH="$HOME/opt/bat-pt/bin:$PATH"
+export LD_LIBRARY_PATH="$HOME/opt/bat-pt/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+bat-config --prefix --features
+ldd /path/to/ThErrorsInGoldenModes/dist/bin/mainGM | grep BAT
+nm -D "$HOME/opt/bat-pt/lib/libBAT.so" | c++filt | grep SetParallelTempering
+```
+
+Use `lib64` if that is your configured library directory. The installation is
+relocatable; consumers must be reconfigured when its prefix changes. No build
+system can prevent an explicitly conflicting loader environment from selecting
+an older ABI-compatible-named library.
+
+## Tests and examples
+
+```sh
+cmake -S . -B build-cmake -DBAT_BUILD_PT_TESTS=ON \
+  -DBAT_BUILD_INSTALL_TESTS=ON -DBAT_BUILD_LEGACY_TESTS=ON \
+  -DBAT_BUILD_EXAMPLES=ON
+cmake --build build-cmake -j 4
+ctest --test-dir build-cmake --output-on-failure
+```
+
+Pass `BAT_DIAGNOSTICS_PYTHON=/path/to/venv/bin/python` to include the statistical
+analyzer's tests; install its dependencies from `diagnostics/requirements.txt`.
+Launcher-specific arguments go in the semicolon-separated `MPIEXEC_PREFLAGS`.
+For example, local OpenMPI on some macOS machines needs
+`--map-by;slot;--bind-to;none;--host;localhost:8`.
+
+On the local ROOT 6.40 installation, upstream `legacy_BCHistogram` (an exact
+floating-point boundary assertion) and `legacy_BCPrior` (numeric versus histogram
+mode comparison) fail. Both failures were reproduced against the pre-migration
+BAT installation. They remain visible in CTest; their assertions were not relaxed.
+The PT, proposal-cache, diagnostics and installation tests are independent.
+
+The installation test moves a staging prefix, builds and runs shared/static CMake
+consumers and a bat-config consumer, runs installed executables, and generates,
+builds and runs new projects. It does not modify your configured install prefix.
+
+With `BAT_BUILD_DOCS=ON`, build `BAT_reference` explicitly to generate the HTML
+reference. To create a project from an installed BAT, run `bat-project MyAnalysis
+MyModel`, then configure it with the BAT prefix as above. A Makefile is retained
+for compatibility.
+
+## Migration validation
+
+The macOS/ROOT 6.40 checks cover shared and static libraries, a static-only
+`lib64` installation, relocation to a prefix containing spaces, CMake and
+bat-config/pkg-config consumers, generated projects, compiled examples,
+RooStats/OpenMP builds, and the Doxygen reference target. GoldenModes' prior
+checks and HEPfit's MPI/PT integration tests pass against the installed package.
+A dangling reference in an upstream integration test was corrected without
+changing its numerical assertion. The two upstream failures described above
+also occur with the old BAT installation.
+
+Cuba is not installed on the validation machine: its missing-dependency error
+was checked, but a real Cuba-enabled build still needs validation. The Linux
+cluster build/run must also be checked before retiring autotools entirely.

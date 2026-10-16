@@ -1,3 +1,4 @@
+#include "../../MPIEnvironment.h"
 #include "PolAsymm.h"
 
 #include <BAT/BCAux.h>
@@ -14,6 +15,7 @@
 
 int main()
 {
+    BATExampleMPIEnvironment mpi;
     // open log file with default level of logging
     BCLog::OpenLog("log.txt", BCLog::detail, BCLog::summary);
 

@@ -1,3 +1,4 @@
+#include "../../MPIEnvironment.h"
 #include "ReferenceCounting.h"
 
 #include <BAT/BCAux.h>
@@ -12,6 +13,7 @@
 
 int main()
 {
+    BATExampleMPIEnvironment mpi;
     // open log file
     BCLog::OpenLog("log.txt", BCLog::detail, BCLog::detail);
 

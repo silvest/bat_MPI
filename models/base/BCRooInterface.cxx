@@ -272,12 +272,7 @@ void BCRooInterface::SetupRooStatsMarkovChain()
     for (int countChains = 1; countChains <= nchains ; countChains++ ) {
         double tempweight = 1.0;
         fVecWeights.push_back(tempweight);
-        std::vector<double> tempvec;
-        TIterator* setiter = fParamsPOI->createIterator();
-        double tempval = 0.;
-        while (setiter->Next()) {
-            tempvec.push_back(tempval);
-        }
+        std::vector<double> tempvec(fParamsPOI->getSize(), 0.);
         fPreviousStep.push_back(tempvec);
         fCurrentStep.push_back(tempvec);
     }
@@ -309,14 +304,13 @@ void BCRooInterface::MCMCIterationInterface()
             // stored in fMCMCx.
 
             // std::cout << "log(likelihood*prior)" << *GetMarkovChainValue() << std::endl; //does not work this way?!
-            TIterator* setiter = fParams->createIterator();
             int j = 0;
 
             //store only POI in RooStats MarkovChain object
             //TIterator* setiter = fParamsPOI->createIterator();
             //int j = 0;
 
-            while (setiter->Next()) {
+            while (j < fParams->getSize()) {
 
                 //check parameter names
                 const BCParameter& tempBCparam = GetParameter(j);

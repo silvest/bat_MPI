@@ -1,9 +1,11 @@
+#include "../../MPIEnvironment.h"
 #include "PoissonModel.h"
 
 #include <BAT/BCLog.h>
 
 int main()
 {
+    BATExampleMPIEnvironment mpi;
     // open log file
     BCLog::OpenLog("log.txt", BCLog::detail, BCLog::detail);
 

@@ -1,0 +1,6 @@
+// Use the same include search as BAT sources; reject a stale autotools header.
+#include <config.h>
+#ifndef BAT_CMAKE_CONFIG_H
+#error "CMake picked up an autotools config.h; check include directory order"
+#endif
+static_assert(ROOTVERSION == @ROOTVERSION_NUM@, "Wrong ROOT configuration header");

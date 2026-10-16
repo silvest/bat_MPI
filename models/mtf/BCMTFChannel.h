@@ -21,7 +21,7 @@
 
 // ---------------------------------------------------------
 
-#include "../../BAT/BCAux.h"
+#include <BAT/BCAux.h>
 
 #include <TH1D.h>
 

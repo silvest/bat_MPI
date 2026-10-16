@@ -25,3 +25,5 @@ runSystematics
 runTrialFunction
 sensitivity
 templatefit
+
+!CMakeLists.txt

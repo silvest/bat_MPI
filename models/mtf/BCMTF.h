@@ -25,7 +25,7 @@
 
 // ---------------------------------------------------------
 
-#include "../../BAT/BCModel.h"
+#include <BAT/BCModel.h>
 
 #include <TH1D.h>
 

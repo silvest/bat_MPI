@@ -1,3 +1,4 @@
+#include "../../../MPIEnvironment.h"
 #include <BAT/BCGaussianPrior.h>
 #include <BAT/BCLog.h>
 #include <BAT/BCParameter.h>
@@ -12,6 +13,7 @@
 
 int main()
 {
+    BATExampleMPIEnvironment mpi;
     // open log file
     BCLog::OpenLog("log.txt", BCLog::detail);
 

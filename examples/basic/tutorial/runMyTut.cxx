@@ -1,3 +1,4 @@
+#include "../../MPIEnvironment.h"
 // ***************************************************************
 // This file was created using the bat-project script
 // for project MyTut.
@@ -12,6 +13,7 @@
 
 int main()
 {
+    BATExampleMPIEnvironment mpi;
     // set nicer style for drawing than the ROOT default
     BCAux::SetStyle();
 

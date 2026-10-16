@@ -1,3 +1,12 @@
+CMake builds
+============
+
+Enable `BAT_BUILD_EXAMPLES=ON` and build normally. Standalone C++ executables
+are placed in `build-cmake/examples/`, with names starting `example_`. Run each
+with one MPI process; they initialize MPI but have no distributed worker loop.
+ROOT `.C` macros remain source examples. Input data paths in historical examples
+may require running from their original example directory.
+
 BAT examples
 ============
 

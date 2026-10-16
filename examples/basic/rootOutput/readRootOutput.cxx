@@ -1,3 +1,4 @@
+#include "../../MPIEnvironment.h"
 #include <BAT/BCH1D.h>
 #include <BAT/BCH2D.h>
 #include <BAT/BCEmptyModel.h>
@@ -7,6 +8,7 @@
 
 int main()
 {
+    BATExampleMPIEnvironment mpi;
     // open log file
     BCLog::OpenLog("log.txt", BCLog::detail, BCLog::detail);
 

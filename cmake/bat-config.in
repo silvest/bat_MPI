@@ -1,0 +1,25 @@
+#!/bin/sh
+# Compatibility interface. Prefer find_package(BAT CONFIG) with BAT::BAT.
+set -eu
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+prefix=$(CDPATH= cd -- "$script_dir/@BAT_BINDIR_TO_PREFIX@" && pwd)
+libdir="$prefix/@CMAKE_INSTALL_LIBDIR@"
+incdir="$prefix/@CMAKE_INSTALL_INCLUDEDIR@"
+if [ "$#" -eq 0 ]; then
+  echo "Usage: bat-config --prefix|--version|--cflags|--libs|--bindir|--incdir|--libdir|--features" >&2
+  exit 1
+fi
+for option do
+  case "$option" in
+    --prefix) printf '%s\n' "$prefix" ;;
+    --version) printf '%s\n' '@PROJECT_VERSION@' ;;
+    --cflags) printf '%s\n' "-I\"$incdir\" @BAT_COMPAT_CFLAGS@" ;;
+    --libs) printf '%s\n' "-L\"$libdir\" -Wl,-rpath,\"$libdir\" @BAT_COMPAT_LIBS@ @BAT_COMPAT_DEP_LIBS@" ;;
+    --bindir) printf '%s\n' "$script_dir" ;;
+    --incdir) printf '%s\n' "$incdir" ;;
+    --libdir) printf '%s\n' "$libdir" ;;
+    --features) printf '%s\n' 'MPI PT proposal-cache transport-diagnostics models=@BAT_BUILD_MODELS@ mtf=@BAT_BUILD_MTF@ RooStats=@BAT_ENABLE_ROOSTATS@ Cuba=@BAT_ENABLE_CUBA@ OpenMP=@BAT_ENABLE_OPENMP@' ;;
+    --help) echo 'Usage: bat-config --prefix|--version|--cflags|--libs|--bindir|--incdir|--libdir|--features' ;;
+    *) echo "Unknown bat-config option: $option" >&2; exit 1 ;;
+  esac
+done

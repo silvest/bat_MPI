@@ -25,7 +25,7 @@
 
 #include <TH1D.h>
 
-#include "../../BAT/BCLog.h"
+#include <BAT/BCLog.h>
 
 class BCMTF;
 class TTree;

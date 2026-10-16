@@ -1,31 +1,92 @@
 cmake_minimum_required(VERSION 3.16 FATAL_ERROR)
-
-# This CMake build currently covers the core BAT library only (BAT/ headers
-# + src/). models/, test/, examples/ and doc/ are still built via autotools
-# (see configure.ac / Makefile.am), and CUBA, RooStats and OpenMP support are
-# not yet available through this CMake build.
 project(BAT VERSION 1.0.0 LANGUAGES CXX)
 
-set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake" ${CMAKE_MODULE_PATH})
-
+list(PREPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
+if(PROJECT_SOURCE_DIR STREQUAL PROJECT_BINARY_DIR)
+  message(FATAL_ERROR "Use an out-of-source build: cmake -S . -B build-cmake")
+endif()
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-option(BAT_BUILD_SHARED_LIBS "Build BAT as a shared library" ON)
-option(BAT_BUILD_STATIC_LIBS "Build BAT as a static library" ON)
+option(BAT_BUILD_SHARED_LIBS "Build shared BAT libraries" ON)
+option(BAT_BUILD_STATIC_LIBS "Build static BAT libraries" ON)
+option(BAT_BUILD_MODELS "Build BATmodels fitters" ON)
+option(BAT_BUILD_MTF "Build BATmtf template fitters" ON)
+option(BAT_ENABLE_ROOSTATS "Build the optional RooFit/RooStats interface" OFF)
+option(BAT_ENABLE_CUBA "Use an existing Cuba installation" OFF)
+option(BAT_ENABLE_OPENMP "Enable legacy OpenMP thread bookkeeping (MPI remains the sampler backend)" OFF)
+option(BAT_BUILD_DOCS "Enable the BAT_reference Doxygen target" OFF)
+option(BAT_BUILD_EXAMPLES "Build standalone examples (single MPI process)" OFF)
+option(BAT_BUILD_LEGACY_TESTS "Build upstream unit tests (single MPI process)" OFF)
+if(NOT BAT_BUILD_SHARED_LIBS AND NOT BAT_BUILD_STATIC_LIBS)
+  message(FATAL_ERROR "Enable at least one of BAT_BUILD_SHARED_LIBS/BAT_BUILD_STATIC_LIBS")
+endif()
+if(BAT_ENABLE_ROOSTATS AND NOT BAT_BUILD_MODELS)
+  message(FATAL_ERROR "BAT_ENABLE_ROOSTATS requires BAT_BUILD_MODELS")
+endif()
 
 include(GNUInstallDirs)
-
-find_package(ROOT 5.34.19 REQUIRED
-  COMPONENTS Core Imt RIO Net Hist Graf Graf3d Gpad Tree Rint Postscript
-             Matrix Physics MathCore Minuit MathMore
-)
+include(CMakePackageConfigHelpers)
+find_package(ROOT 6.08 REQUIRED COMPONENTS Core Imt RIO Net Hist Graf Graf3d Gpad Tree
+  Rint Postscript Matrix Physics MathCore Minuit MathMore)
 include(${ROOT_USE_FILE})
+find_package(MPI REQUIRED COMPONENTS CXX)
+if(NOT CMAKE_CXX_STANDARD)
+  if(ROOT_CXX_STANDARD)
+    set(CMAKE_CXX_STANDARD ${ROOT_CXX_STANDARD})
+  else()
+    set(CMAKE_CXX_STANDARD 17)
+  endif()
+endif()
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+if(APPLE)
+  set(CMAKE_INSTALL_RPATH "@loader_path")
+else()
+  set(CMAKE_INSTALL_RPATH "$ORIGIN")
+endif()
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH ON)
 
-find_package(MPI REQUIRED)
-
+set(BAT_CORE_DEPENDENCIES ROOT::Core ROOT::Hist ROOT::Graf ROOT::Graf3d ROOT::Gpad ROOT::Tree
+  ROOT::Rint ROOT::Postscript ROOT::Matrix ROOT::Physics ROOT::MathCore ROOT::Minuit ROOT::MathMore MPI::MPI_CXX)
+if(BAT_ENABLE_OPENMP)
+  find_package(OpenMP REQUIRED COMPONENTS CXX)
+  list(APPEND BAT_CORE_DEPENDENCIES OpenMP::OpenMP_CXX)
+endif()
+if(BAT_ENABLE_CUBA)
+  find_package(Cuba REQUIRED)
+  list(APPEND BAT_CORE_DEPENDENCIES Cuba::Cuba)
+endif()
+if(BAT_ENABLE_ROOSTATS)
+  find_package(ROOT REQUIRED COMPONENTS RooFit RooFitCore RooStats)
+endif()
+include(cmake/BATLibrary.cmake)
 add_subdirectory(src)
+if(BAT_BUILD_MODELS)
+  add_subdirectory(models/base)
+endif()
+if(BAT_BUILD_MTF)
+  add_subdirectory(models/mtf)
+endif()
+include(cmake/BATInstall.cmake)
+if(BAT_BUILD_DOCS)
+  find_package(Doxygen REQUIRED)
+  set(DOXYGEN_GENERATE_LATEX NO)
+  set(DOXYGEN_RECURSIVE YES)
+  set(DOXYGEN_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/reference")
+  set(DOXYGEN_USE_MDFILE_AS_MAINPAGE "${PROJECT_SOURCE_DIR}/doc/ref-guide/front.md")
+  doxygen_add_docs(BAT_reference BAT models doc/ref-guide/front.md)
+  install(DIRECTORY "${PROJECT_BINARY_DIR}/reference/html/"
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/BAT/reference OPTIONAL)
+endif()
+if(BAT_BUILD_EXAMPLES)
+  add_subdirectory(examples)
+endif()
+if(BAT_BUILD_LEGACY_TESTS)
+  enable_testing()
+  add_subdirectory(test)
+endif()
 
 # Standalone MPI regression tests (the legacy autotools suite predates this MPI fork).
 option(BAT_BUILD_PT_TESTS "Build Parallel Tempering MPI regression tests" OFF)
@@ -74,3 +135,15 @@ if(BAT_BUILD_PT_TESTS AND BAT_DIAGNOSTICS_PYTHON)
   set_tests_properties(MCMC_diagnostics PROPERTIES TIMEOUT 120
     ENVIRONMENT "MPLCONFIGDIR=${CMAKE_BINARY_DIR}/diagnostics-mpl;XDG_CACHE_HOME=${CMAKE_BINARY_DIR}/diagnostics-cache;PYTHONDONTWRITEBYTECODE=1")
 endif()
+
+option(BAT_BUILD_INSTALL_TESTS "Test installed CMake and bat-config consumers" OFF)
+if(BAT_BUILD_INSTALL_TESTS)
+  enable_testing()
+  add_test(NAME BAT_installed_consumers COMMAND ${CMAKE_COMMAND}
+    -DBAT_BUILD_DIR=${PROJECT_BINARY_DIR} -DBAT_SOURCE_DIR=${PROJECT_SOURCE_DIR}
+    -DBAT_TEST_CONFIG=$<CONFIG> -DBAT_TEST_CXX=${CMAKE_CXX_COMPILER}
+    -P ${PROJECT_SOURCE_DIR}/test/cmake/install_consumer.cmake)
+  set_tests_properties(BAT_installed_consumers PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE)
+endif()
+message(STATUS "BAT MPI: models=${BAT_BUILD_MODELS}, MTF=${BAT_BUILD_MTF}, RooStats=${BAT_ENABLE_ROOSTATS}, Cuba=${BAT_ENABLE_CUBA}")
+message(STATUS "BAT installation: ${CMAKE_INSTALL_PREFIX} (${CMAKE_INSTALL_LIBDIR}); CMake is the primary build system")
