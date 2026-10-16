@@ -279,6 +279,35 @@ public:
     unsigned GetNChains() const
     { return fMCMCNChains; }
 
+    /** Configure independent ladders, ordered from cold to hot.
+     * Each slot samples prior * likelihood^(1/T). Call before running MCMC.
+     * GetNChains() includes hot slots; output contains only the cold slots.
+     * A single temperature {1} disables exchanges. */
+    void SetParallelTempering(const std::vector<double>& temperatures,
+                              unsigned ladders = 2, unsigned swap_interval = 10);
+
+    bool GetParallelTempering() const { return fPT.temperatures.size() > 1; }
+    unsigned GetNColdChains() const
+    { return fPT.temperatures.empty() ? fMCMCNChains : fMCMCNChains / fPT.temperatures.size(); }
+    bool IsColdChain(unsigned chain) const { return chain < GetNColdChains(); }
+    double GetChainTemperature(unsigned chain) const;
+    const std::vector<double>& GetTemperatures() const { return fPT.temperatures; }
+    const std::vector<unsigned long long>& GetSwapAttempts() const { return fPT.attempts; }
+    const std::vector<unsigned long long>& GetSwapAccepts() const { return fPT.accepts; }
+    /** Main-run swap statistics, aggregated over independent ladders. */
+    void WriteParallelTemperingDiagnostics(const std::string& filename) const;
+
+    /** Schedule saving the tuned proposal at the end of pre-run (empty disables). */
+    void SetProposalFunctionOutput(const std::string& filename)
+    { fProposalCache.output = filename; }
+    /** Schedule loading instead of adaptation on the next fresh MCMC run.
+     * Restores per-replica proposals and starting positions, re-evaluates the
+     * target, and discards warmup sweeps with fixed proposals. Not an RNG checkpoint. */
+    void LoadProposalFunction(const std::string& filename, unsigned warmup = 1000);
+    /** Save the current proposal and replica positions immediately. */
+    void SaveProposalFunction(const std::string& filename) const;
+    bool GetProposalFunctionLoaded() const { return fProposalCache.loaded; }
+
     /**
      * @return lag of the Markov chains */
     unsigned GetNLag() const
@@ -1860,6 +1889,27 @@ protected:
 
     /** Storage for plot objects with proper clean-up */
     mutable BCAux::BCTrash<TObject> fObjectTrash;
+
+    struct ParallelTemperingState {
+        std::vector<double> temperatures;
+        unsigned swap_interval;
+        unsigned exchange_round;
+        std::vector<unsigned long long> attempts, accepts;
+        ParallelTemperingState() : swap_interval(10), exchange_round(0) {}
+    };
+    ParallelTemperingState fPT;
+    void ExchangeReplicas();
+    void ResetReplicaExchangeStatistics();
+
+    struct ProposalCacheSettings {
+        std::string input, output;
+        unsigned warmup;
+        bool loaded;
+        ProposalCacheSettings() : warmup(1000), loaded(false) {}
+    };
+    ProposalCacheSettings fProposalCache;
+    void InitializeFromProposalFunction();
+
 
 };
 

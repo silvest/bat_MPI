@@ -26,3 +26,33 @@ include(${ROOT_USE_FILE})
 find_package(MPI REQUIRED)
 
 add_subdirectory(src)
+
+# Standalone MPI regression tests (the legacy autotools suite predates this MPI fork).
+option(BAT_BUILD_PT_TESTS "Build Parallel Tempering MPI regression tests" OFF)
+if(BAT_BUILD_PT_TESTS)
+  enable_testing()
+  add_executable(ParallelTempering_MPI_TEST test/ParallelTempering_MPI_TEST.cxx)
+  target_link_libraries(ParallelTempering_MPI_TEST PRIVATE BAT::BAT MPI::MPI_CXX)
+  foreach(case IN ITEMS serial partial two_temperatures factorized_warmup disabled)
+    if(case STREQUAL "serial")
+      set(nproc 1)
+    elseif(case STREQUAL "two_temperatures")
+      set(nproc 5)
+    else()
+      set(nproc 3)
+    endif()
+    add_test(NAME PT_${case} COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${nproc}
+      ${MPIEXEC_PREFLAGS} $<TARGET_FILE:ParallelTempering_MPI_TEST> ${MPIEXEC_POSTFLAGS} ${case})
+    set_tests_properties(PT_${case} PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
+  endforeach()
+endif()
+
+if(BAT_BUILD_PT_TESTS)
+  add_executable(ProposalFunction_MPI_TEST test/ProposalFunction_MPI_TEST.cxx)
+  target_link_libraries(ProposalFunction_MPI_TEST PRIVATE BAT::BAT MPI::MPI_CXX)
+  foreach(case IN ITEMS factorized multivariate pt)
+    add_test(NAME Proposal_${case} COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 3
+      ${MPIEXEC_PREFLAGS} $<TARGET_FILE:ProposalFunction_MPI_TEST> ${MPIEXEC_POSTFLAGS} ${case})
+    set_tests_properties(Proposal_${case} PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
+  endforeach()
+endif()

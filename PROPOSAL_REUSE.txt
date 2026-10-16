@@ -1,0 +1,139 @@
+Saving and reusing bat_MPI proposals
+===================================
+
+Implemented in:
+  /Users/silvest/Documents/GitHub/bat_MPI/BAT/BCEngineMCMC.h
+  /Users/silvest/Documents/GitHub/bat_MPI/src/BCEngineMCMC.cxx
+Integrated into:
+  /Users/silvest/Documents/GitHub/ThErrorsInGoldenModes/mainGM.cpp
+
+Rebuilt executable:
+  /Users/silvest/Documents/GitHub/ThErrorsInGoldenModes/build/pt/mainGM
+
+Usage in the GoldenModes driver
+------------------------------
+Every ordinary run now automatically saves the tuned proposal at the END
+of pre-run, before production begins. With --outfile first_, this is:
+  first_proposal.txt
+
+You can choose a filename:
+  --save-proposal tuned_proposal.txt
+
+For a later run, keep the same model, prior-region options, replica count,
+proposal type and PT temperature ladder, and add:
+  --load-proposal tuned_proposal.txt --proposal-warmup 1000 --outfile second_
+
+This bypasses adaptive pre-run, restores the saved proposal and pre-run
+endpoint for every replica, evaluates the current likelihood and priors at
+those endpoints, and discards 1,000 sweeps using fixed proposals. Then it
+collects the requested --nRun production sweeps. --nPreRun,
+--nPreRunFactorized and --nUpdateMax do not control this loaded-proposal
+path. The only warm-up length used on load is --proposal-warmup.
+
+The default discarded warm-up is 1000 sweeps. You can explicitly request
+0, but this does not establish convergence. Warm-up samples are excluded
+from posterior statistics, ROOT trees, custom model histograms and the
+reported production swap counts. The newly saved proposal file after a
+load contains the positions reached after that discarded warm-up.
+
+Example workflow (add your usual channel, model and sampling flags):
+
+First run:
+  --indSU3 --pt-full-priors --nChains 4 --pt-temperatures 1,2,4,8,16
+  --save-proposal tuned_proposal.txt --outfile first_
+
+Second run:
+  --indSU3 --pt-full-priors --nChains 4 --pt-temperatures 1,2,4,8,16
+  --load-proposal tuned_proposal.txt --proposal-warmup 1000 --outfile second_
+
+Continue using --Univariate for both runs if you trained a factorized
+proposal. A multivariate proposal cannot be loaded as factorized or vice
+versa. MPI process count and RNG seed may differ between runs. The number
+of replica slots and their temperatures must match.
+
+The file is useful for repeated runs of the same target. Structural checks
+reject different parameter names/order, bounds, fixed parameters or values,
+replica counts, proposal types, temperature assignments and malformed data.
+For example, a proposal trained on one restricted prior region is rejected
+when --pt-full-priors expands those bounds: train a full-domain proposal once.
+
+The engine cannot generically identify changes to experimental data,
+likelihood code, prior shape within the same bounds or other model logic.
+These may pass structural checks. Densities are always freshly evaluated,
+so old likelihood/prior values are never reused, but a changed target can
+require substantially longer equilibration or fresh proposal training.
+
+This is proposal reuse with saved starting positions, not an exact restart
+of the previous random trajectory. RNG state, old samples, old posterior
+statistics and old convergence decisions are not imported. The old BAT
+convergence result remains unset on load. Examine the new cold-chain traces,
+mode visits and effective sample sizes; proposal reuse does not certify mixing.
+Files can be saved even when the original pre-run exhausted its iteration
+limit without convergence: inspect the training run before relying on them.
+
+What is persisted
+-----------------
+A versioned, full-double-precision, locale-independent text format stores:
+  - parameter names/order, bounds, fixed status and fixed values;
+  - total replicas and temperature per replica slot;
+  - factorized/multivariate mode and proposal Student-t degrees of freedom;
+  - scales for every replica;
+  - covariance matrices and the actual Cholesky transforms, including any
+    regularization used by the engine, for multivariate proposals;
+  - end-of-pre-run parameter vectors for every cold AND hot replica.
+
+Files are written to a temporary file beside the destination, then renamed
+only after a successful write. Invalid or truncated inputs are rejected
+before chain initialization. The built-in proposal kernels are supported;
+additional private state in a custom ProposalFunction override is not serialized.
+
+C++ library API
+---------------
+Before starting the first run, after configuring the model:
+  model.SetProposalFunctionOutput("tuned_proposal.txt");
+  model.MarginalizeAll();
+
+On a fresh model with matching configuration:
+  model.LoadProposalFunction("tuned_proposal.txt", 1000);
+  model.SetProposalFunctionOutput("next_proposal.txt");  // optional
+  model.MarginalizeAll();
+
+LoadProposalFunction schedules validation/loading for the next pre-run
+entry point; it does not start MPI collectives immediately. Configure it
+before initializing MCMC. SetProposalFunctionOutput("") disables automatic
+saving in library clients. The driver instead saves <outfile>proposal.txt
+by default. SaveProposalFunction(filename) can also save an initialized
+proposal immediately. GetProposalFunctionLoaded() reports successful loading.
+
+Validation
+----------
+Eight MPI regression tests passed: the five existing PT tests and three
+proposal persistence tests covering factorized proposals, correlated
+multivariate proposals, and PT with distinct proposals for hot/cold replicas.
+The new tests check exact numeric round trips; fixed parameters; rejection
+of incompatible and truncated files; discarded warm-up including zero;
+no repeated adaptation; fresh likelihood/prior evaluation; posterior means
+against an analytic correlated Gaussian target; and histogram sample counts.
+
+An end-to-end GoldenModes smoke test trained with 2 MPI processes, saved
+the proposal, then loaded it using 3 processes with --pt-full-priors,
+5 discarded warm-up sweeps and 2 production sweeps per replica. Logs confirm
+adaptation was skipped. ROOT trees and custom likelihood histograms each
+contain exactly 4 cold production samples, with consistent density fields.
+These short smoke runs are software checks, not evidence of scientific
+convergence for the physics fit.
+
+While integrating reuse, the production path was also corrected to use the
+finished multivariate proposal immediately: the factorized warm-up threshold
+now applies only before production, rather than being applied again after
+the production iteration counter resets.
+
+Build and test
+--------------
+cmake --build /Users/silvest/Documents/GitHub/bat_MPI/build-pt -j 4
+cmake --build /Users/silvest/Documents/GitHub/ThErrorsInGoldenModes/build/pt -j 4
+ctest --test-dir /Users/silvest/Documents/GitHub/bat_MPI/build-pt --output-on-failure
+
+The dedicated builds use the matching updated bat_MPI headers and library.
+No installed BAT copy was replaced. To configure those dedicated builds on
+another checkout, see the existing PARALLEL_TEMPERING.txt in GoldenModes.

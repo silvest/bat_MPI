@@ -11,6 +11,12 @@
 
 #include "BCEngineMCMC.h"
 
+#include <fstream>
+#include <iomanip>
+#include <locale>
+#include <cstdio>
+#include <unistd.h>
+
 #include "BCAux.h"
 #include "BCGaussianPrior.h"
 #include "BCH1D.h"
@@ -196,6 +202,8 @@ BCEngineMCMC::BCEngineMCMC(const BCEngineMCMC& other)
       fHistogramRescalePadding(other.fHistogramRescalePadding),
       fObjectTrash(other.fObjectTrash)
 {
+    fPT = other.fPT;
+    fProposalCache = other.fProposalCache;
     // set again in case user overloads the setter to create custom structures
     SetNChains(other.fMCMCNChains);
 
@@ -218,6 +226,8 @@ BCEngineMCMC& BCEngineMCMC::operator=(const BCEngineMCMC& other)
     try {
         fMCMCThreadLocalStorage = other.fMCMCThreadLocalStorage;
         fChainIndex = other.fChainIndex;
+        fPT = other.fPT;
+        fProposalCache = other.fProposalCache;
         fName = other.fName;
         fSafeName = other.fSafeName;
         fParameters = other.fParameters;
@@ -431,6 +441,8 @@ void BCEngineMCMC::SetPrecision(BCEngineMCMC::Precision precision)
 void BCEngineMCMC::SetPrecision(const BCEngineMCMC& other)
 {
     SetNChains(other.fMCMCNChains);
+    fPT = other.fPT;
+    fProposalCache = other.fProposalCache;
     fMCMCNLag                             = other.fMCMCNLag;
     fMCMCNIterationsPreRunMin             = other.fMCMCNIterationsPreRunMin;
     fMCMCNIterationsPreRunMax             = other.fMCMCNIterationsPreRunMax;
@@ -773,6 +785,8 @@ void BCEngineMCMC::InitializeMarkovChainTree(bool replacetree, bool replacefile)
         fMCMCTree->Branch("Iteration",      &fMCMCTree_State.iteration,       "iteration/i");
         fMCMCTree->Branch("Phase",          &fMCMCPhase,                      "phase/I");
         fMCMCTree->Branch("LogProbability", &fMCMCTree_State.log_probability, "log_probability/D");
+        fMCMCTree->Branch("LogLikelihood", &fMCMCTree_State.log_likelihood, "log_likelihood/D");
+        fMCMCTree->Branch("LogPrior", &fMCMCTree_State.log_prior, "log_prior/D");
         fMCMCTree_State.parameters.assign(GetNParameters(), 0);
         for (unsigned j = 0; j < GetNParameters(); ++j) {
             fMCMCTree->Branch(GetParameter(j).GetSafeName().data(), &fMCMCTree_State.parameters[j], (GetParameter(j).GetSafeName() + "/D").data());
@@ -840,9 +854,9 @@ void BCEngineMCMC::UpdateParameterTree()
     if (!fParameterTree)
         return;
 
-    unsigned nchains = GetNChains();
-    std::vector<double> scale(GetNChains(), 0);
-    std::vector<double> eff(GetNChains(), 0);
+    unsigned nchains = GetNColdChains();
+    std::vector<double> scale(GetNColdChains(), 0);
+    std::vector<double> eff(GetNColdChains(), 0);
 
     // check for branch existences
     TBranch* b_nchains = fParameterTree->GetBranch("nchains");
@@ -857,7 +871,7 @@ void BCEngineMCMC::UpdateParameterTree()
 
     // if scale branch doesn't exist, create it
     if (b_scale == 0)
-        b_scale = fParameterTree->Branch("scale", &(scale.front()), TString::Format("scale[%d]/D", GetNChains()));
+        b_scale = fParameterTree->Branch("scale", &(scale.front()), TString::Format("scale[%d]/D", GetNColdChains()));
     // else set 0, so as not to fill
     else
         b_scale = 0;
@@ -866,7 +880,7 @@ void BCEngineMCMC::UpdateParameterTree()
     unsigned i = 0;
     while (fParameterTree->GetBranch(TString::Format("efficiency_%d", i)))
         ++i;
-    TBranch* b_eff = fParameterTree->Branch(TString::Format("efficiency_%d", i), &(eff.front()), TString::Format("efficiency_%d[%d]/D", i, GetNChains()));
+    TBranch* b_eff = fParameterTree->Branch(TString::Format("efficiency_%d", i), &(eff.front()), TString::Format("efficiency_%d[%d]/D", i, GetNColdChains()));
 
     for (unsigned n = 0; n < fParameterTree->GetEntries(); ++n) {
         if (b_nchains)
@@ -1238,6 +1252,8 @@ void BCEngineMCMC::LoadMCMC(const std::string& filename, std::string mcmcTreeNam
 // --------------------------------------------------------
 void BCEngineMCMC::LoadMCMC(TTree* mcmcTree, TTree* parTree, bool loadObservables)
 {
+    if (GetParallelTempering())
+        throw std::logic_error("Load cold-only samples into a fresh, untempered model; PT checkpoints are not stored");
     fMCMCTreeLoaded = false;
     fMCMCTreeReuseObservables = loadObservables;
 
@@ -1597,115 +1613,320 @@ bool BCEngineMCMC::GetProposalPointMetropolis(unsigned ichain, unsigned ipar, st
     return GetParameter(ipar).IsWithinLimits(x[ipar]);
 }
 
+// --------------------------------------------------------
+void BCEngineMCMC::LoadProposalFunction(const std::string& filename, unsigned warmup)
+{
+    if (fMCMCPhase != kUnsetPhase || !fMCMCStates.empty())
+        throw std::logic_error("LoadProposalFunction must be configured before initializing MCMC");
+    if (filename.empty() || warmup > static_cast<unsigned>(std::numeric_limits<int>::max()))
+        throw std::invalid_argument("LoadProposalFunction needs a filename and warmup <= INT_MAX");
+    fProposalCache.input = filename;
+    fProposalCache.warmup = warmup;
+    fProposalCache.loaded = false;
+}
+
+void BCEngineMCMC::SaveProposalFunction(const std::string& filename) const
+{
+    if (filename.empty() || fMCMCPhase == kUnsetPhase ||
+        fMCMCStates.size() != GetNChains() || fMCMCProposalFunctionScaleFactor.size() != GetNChains())
+        throw std::logic_error("SaveProposalFunction requires an initialized, tuned proposal");
+    if (fMCMCProposeMultivariate && fMCMCNIterationsPreRunFactorized > 0 &&
+        fMCMCCurrentIteration >= 0 && fMCMCCurrentIteration < fMCMCNIterationsPreRunFactorized)
+        throw std::logic_error("Cannot save multivariate proposal before completing factorized warm-up");
+    const unsigned n = GetNParameters(), d = GetNFreeParameters();
+    for (unsigned c = 0; c < GetNChains(); ++c) {
+        if (fMCMCStates[c].parameters.size() != n ||
+            (fMCMCProposeMultivariate ? fMCMCProposalFunctionScaleFactor[c].empty() : fMCMCProposalFunctionScaleFactor[c].size() != n))
+            throw std::logic_error("Proposal scale dimensions do not match the current model");
+        if (fMCMCProposeMultivariate &&
+            (fMultivariateProposalFunctionCovariance.size() != GetNChains() ||
+             fMultivariateProposalFunctionCholeskyDecomposition.size() != GetNChains() ||
+             fMultivariateProposalFunctionCovariance[c].GetNrows() != static_cast<int>(d) ||
+             fMultivariateProposalFunctionCholeskyDecomposition[c].GetNrows() != static_cast<int>(d)))
+            throw std::logic_error("Multivariate proposal dimensions do not match the current model");
+    }
+    // Write beside the destination and atomically replace only after successful flush.
+    const std::string temporary = filename + ".tmp." + std::to_string(static_cast<long long>(getpid()));
+    try {
+        std::ofstream out(temporary.c_str());
+        out.imbue(std::locale::classic());
+        out.exceptions(std::ios::failbit | std::ios::badbit);
+        out << std::setprecision(std::numeric_limits<double>::max_digits10);
+        out << "BAT_MPI_PROPOSAL 1\n" << n << ' ' << d << ' ' << GetNChains() << ' '
+            << fMCMCProposeMultivariate << ' ' << fMCMCProposalFunctionDof << ' '
+            << fMultivariateCovarianceUpdates << '\n';
+        for (unsigned p = 0; p < n; ++p) {
+            const BCParameter& par = GetParameter(p);
+            out << std::quoted(par.GetName()) << ' ' << par.GetLowerLimit() << ' '
+                << par.GetUpperLimit() << ' ' << par.Fixed() << ' '
+                << (par.Fixed() ? par.GetFixedValue() : 0.) << '\n';
+        }
+        for (unsigned c = 0; c < GetNChains(); ++c) {
+            out << GetChainTemperature(c) << ' ' << fMCMCProposalFunctionScaleFactor[c].size() << '\n';
+            for (double value : fMCMCProposalFunctionScaleFactor[c]) out << value << ' ';
+            out << '\n';
+            if (fMCMCProposeMultivariate) {
+                for (unsigned i = 0; i < d; ++i) {
+                    for (unsigned j = 0; j < d; ++j) out << fMultivariateProposalFunctionCovariance[c][i][j] << ' ';
+                    out << '\n';
+                }
+                // Preserve the actual transform, including any Cholesky regularization.
+                for (unsigned i = 0; i < d; ++i) {
+                    for (unsigned j = 0; j < d; ++j) out << fMultivariateProposalFunctionCholeskyDecomposition[c][i][j] << ' ';
+                    out << '\n';
+                }
+            }
+            for (double value : fMCMCStates[c].parameters) out << value << ' ';
+            out << '\n';
+        }
+        out << "END\n";
+        out.close();
+        if (std::rename(temporary.c_str(), filename.c_str()) != 0)
+            throw std::runtime_error("Cannot replace proposal file: " + filename);
+        BCLog::OutSummary("Saved proposal: " + filename);
+    } catch (...) {
+        std::remove(temporary.c_str());
+        throw;
+    }
+}
+
+void BCEngineMCMC::InitializeFromProposalFunction()
+{
+    std::ifstream in(fProposalCache.input.c_str());
+    in.imbue(std::locale::classic());
+    const auto fail = [this](const std::string& reason) {
+        throw std::runtime_error("Cannot load proposal '" + fProposalCache.input + "': " + reason);
+    };
+    std::string magic;
+    unsigned version = 0, n = 0, d = 0, chains = 0, multivariate = 0, updates = 0;
+    double dof = 0.;
+    if (!(in >> magic >> version) || magic != "BAT_MPI_PROPOSAL" || version != 1)
+        fail("missing file or unsupported format/version");
+    if (!(in >> n >> d >> chains >> multivariate >> dof >> updates) ||
+        n != GetNParameters() || d != GetNFreeParameters() || chains != GetNChains() ||
+        multivariate != static_cast<unsigned>(fMCMCProposeMultivariate) || !std::isfinite(dof))
+        fail("parameter/replica counts or proposal type differ, or invalid header");
+    // Validate against the current model before allocating or initializing chains.
+    for (unsigned p = 0; p < n; ++p) {
+        std::string name;
+        double low, high, fixed_value;
+        unsigned fixed;
+        const BCParameter& par = GetParameter(p);
+        if (!(in >> std::quoted(name) >> low >> high >> fixed >> fixed_value) ||
+            name != par.GetName() || low != par.GetLowerLimit() || high != par.GetUpperLimit() ||
+            fixed != static_cast<unsigned>(par.Fixed()) ||
+            (par.Fixed() && fixed_value != par.GetFixedValue()))
+            fail("parameter name/order, bounds or fixed value differ at index " + std::to_string(p));
+    }
+    std::vector<std::vector<double> > scales(chains), positions(chains, std::vector<double>(n));
+    std::vector<TMatrixDSym> covariance;
+    std::vector<TMatrixD> cholesky;
+    if (multivariate) {
+        covariance.assign(chains, TMatrixDSym(d));
+        cholesky.assign(chains, TMatrixD(d, d));
+    }
+    const auto read_finite = [&in, &fail]() {
+        double value;
+        if (!(in >> value) || !std::isfinite(value)) fail("truncated file or nonfinite number");
+        return value;
+    };
+    for (unsigned c = 0; c < chains; ++c) {
+        if (read_finite() != GetChainTemperature(c)) fail("temperature ladder or replica ordering differ");
+        unsigned scale_count = 0;
+        if (!(in >> scale_count) || (multivariate ? (scale_count != 1 && scale_count != n) : scale_count != n))
+            fail("invalid proposal scale dimensions");
+        scales[c].resize(scale_count);
+        for (unsigned p = 0; p < scales[c].size(); ++p) {
+            scales[c][p] = read_finite();
+            // After factorized warm-up BAT can retain per-parameter entries;
+            // only entry 0 is active in the multivariate kernel.
+            if (multivariate ? (p == 0 && scales[c][p] <= 0.) :
+                (GetParameter(p).Fixed() ? scales[c][p] != 0. : scales[c][p] <= 0.))
+                fail("invalid proposal scale");
+        }
+        if (multivariate) {
+            for (unsigned i = 0; i < d; ++i)
+                for (unsigned j = 0; j < d; ++j) covariance[c][i][j] = read_finite();
+            for (unsigned i = 0; i < d; ++i)
+                for (unsigned j = 0; j < d; ++j) {
+                    cholesky[c][i][j] = read_finite();
+                    if ((i == j && cholesky[c][i][j] <= 0.) || (j > i && cholesky[c][i][j] != 0.))
+                        fail("invalid Cholesky transform");
+                    if (covariance[c][i][j] != covariance[c][j][i] || (i == j && covariance[c][i][j] < 0.))
+                        fail("invalid covariance matrix");
+                }
+        }
+        for (unsigned p = 0; p < n; ++p) {
+            positions[c][p] = read_finite();
+            if (!GetParameter(p).IsWithinLimits(positions[c][p]) ||
+                (GetParameter(p).Fixed() && positions[c][p] != GetParameter(p).GetFixedValue()))
+                fail("saved starting position is outside the current domain");
+        }
+    }
+    std::string end, extra;
+    if (!(in >> end) || end != "END" || (in >> extra)) fail("missing END marker or trailing data");
+
+    // Saved positions are initial guesses only. Evaluate the current likelihood
+    // and priors; no cached log values, convergence flag, statistics or RNG is reused.
+    SetInitialPositions(positions);
+    fMCMCNIterationsPreRunFactorized = 0;
+    fMCMCProposalFunctionDof = dof;
+    MCMCInitialize();
+    fMCMCProposalFunctionScaleFactor = scales;
+    fMultivariateProposalFunctionCovariance = covariance;
+    fMultivariateProposalFunctionCholeskyDecomposition = cholesky;
+    fMultivariateCovarianceUpdates = updates;
+    fMCMCPhase = kPreRun;
+    fMCMCCurrentIteration = 0;
+    BCLog::OutSummary("Loaded proposal: " + fProposalCache.input);
+    BCLog::OutSummary(Form(" --> Discarding %u warm-up sweeps with fixed proposals; convergence must be reassessed.", fProposalCache.warmup));
+    while (fMCMCCurrentIteration < static_cast<int>(fProposalCache.warmup))
+        GetNewPointMetropolis();
+    // Warm-up is excluded from statistics, custom histograms, trees and swap counts.
+    fMCMCCurrentIteration = -1;
+    fProposalCache.loaded = true;
+}
+
+// --------------------------------------------------------
+void BCEngineMCMC::SetParallelTempering(const std::vector<double>& temperatures,
+                                       unsigned ladders, unsigned swap_interval)
+{
+    if (fMCMCPhase != kUnsetPhase || !fMCMCStates.empty())
+        throw std::logic_error("Configure parallel tempering before initializing MCMC");
+    if (temperatures.empty() || temperatures.front() != 1. || !ladders || !swap_interval ||
+        temperatures.size() > std::numeric_limits<unsigned>::max() / ladders)
+        throw std::invalid_argument("PT needs T[0]=1, positive ladders and swap interval");
+    for (unsigned t = 0; t < temperatures.size(); ++t)
+        if (!std::isfinite(temperatures[t]) || temperatures[t] < 1. ||
+            (t && temperatures[t] <= temperatures[t-1]))
+            throw std::invalid_argument("PT temperatures must be finite and strictly increasing from 1");
+    fPT.temperatures = temperatures;
+    fPT.swap_interval = swap_interval;
+    SetNChains(ladders * temperatures.size());
+    ResetReplicaExchangeStatistics();
+}
+
+double BCEngineMCMC::GetChainTemperature(unsigned chain) const
+{
+    if (chain >= fMCMCNChains || GetNColdChains() == 0)
+        throw std::out_of_range("Invalid replica index");
+    return fPT.temperatures.empty() ? 1. : fPT.temperatures.at(chain / GetNColdChains());
+}
+
+void BCEngineMCMC::ResetReplicaExchangeStatistics()
+{
+    const unsigned n = fPT.temperatures.empty() ? 0 : fPT.temperatures.size() - 1;
+    fPT.attempts.assign(n, 0);
+    fPT.accepts.assign(n, 0);
+    fPT.exchange_round = 0;
+}
+
+void BCEngineMCMC::ExchangeReplicas()
+{
+    const unsigned ladders = GetNColdChains();
+    // Alternating disjoint adjacent pairs; with two temperatures attempt every round.
+    const unsigned start = fPT.temperatures.size() == 2 ? 0 : fPT.exchange_round % 2;
+    ++fPT.exchange_round;
+    for (unsigned t = start; t + 1 < fPT.temperatures.size(); t += 2) {
+        for (unsigned l = 0; l < ladders; ++l) {
+            const unsigned a = t * ladders + l, b = (t + 1) * ladders + l;
+            ++fPT.attempts[t];
+            const double delta = (1. / fPT.temperatures[t] - 1. / fPT.temperatures[t+1]) *
+                                 (fMCMCStates[b].log_likelihood - fMCMCStates[a].log_likelihood);
+            if (delta >= 0. || std::log(fMCMCThreadLocalStorage[a].rng->Rndm()) < delta) {
+                // Exchange physical states, leaving iterations, RNGs, covariance and
+                // acceptance statistics attached to their temperature slots.
+                std::swap(fMCMCStates[a].parameters, fMCMCStates[b].parameters);
+                std::swap(fMCMCStates[a].observables, fMCMCStates[b].observables);
+                std::swap(fMCMCStates[a].log_likelihood, fMCMCStates[b].log_likelihood);
+                std::swap(fMCMCStates[a].log_prior, fMCMCStates[b].log_prior);
+                std::swap(fMCMCStates[a].log_probability, fMCMCStates[b].log_probability);
+                ++fPT.accepts[t];
+            }
+        }
+    }
+}
+
+void BCEngineMCMC::WriteParallelTemperingDiagnostics(const std::string& filename) const
+{
+    std::ofstream out(filename.c_str());
+    if (!out) throw std::runtime_error("Cannot write PT diagnostics: " + filename);
+    out << std::setprecision(17) << "temperature_low,temperature_high,attempts,accepted,acceptance_rate\n";
+    for (unsigned t = 0; t < fPT.attempts.size(); ++t)
+        out << fPT.temperatures[t] << ',' << fPT.temperatures[t+1] << ','
+            << fPT.attempts[t] << ',' << fPT.accepts[t] << ','
+            << (fPT.attempts[t] ? double(fPT.accepts[t]) / fPT.attempts[t] : 0.) << '\n';
+}
+
 /* Begin MPI MOD */
 // --------------------------------------------------------
 bool BCEngineMCMC::AcceptOrRejectPoint(unsigned parameter)
 {
-    bool return_value = true;
-    unsigned mychain = 0;
-    int iproc = 0;
-    unsigned npars = fParameters.Size();
-    int buffsize = npars + 1;
-    double p0[procnum];
-    int index_chain[procnum];    
-    std::vector<double> pars;
-
-    //------------------
-    double *recvbuff = new double[buffsize];
-    double **buff;
-    buff = new double*[procnum];
-    buff[0]=new double[procnum];
-    for(int i = 1; i < procnum; i++) buff[i]=buff[i - 1] + 1;
-    double ** sendbuff = new double *[procnum];
-    sendbuff[0] = new double[procnum * buffsize];
-    for (int il = 1; il < procnum; il++) sendbuff[il] = sendbuff[il - 1] + buffsize;
-    //------------------
-    
-    double ll;
-    bool last = false;
-    bool valid = false;
-    
-    while (mychain < fMCMCNChains) {
-        bool accept = false;
-        // increase counter
-        UpdateChainIndex(mychain);
-        ++fMCMCStates[mychain].iteration;
-        
-        // get proposal point (0 for multivariate proposal)
-        if (fMCMCProposeMultivariate && fMCMCCurrentIteration >= fMCMCNIterationsPreRunFactorized) valid = GetProposalPointMetropolis(mychain, fMCMCThreadLocalStorage[mychain].parameters);
-        else valid = GetProposalPointMetropolis(mychain, parameter, fMCMCThreadLocalStorage[mychain].parameters);
-        
-        if (valid) {
-            if (!last) {
-                // retrieve current probability
-                p0[iproc] = fMCMCStates[mychain].log_probability;
-                if (!std::isfinite(p0[iproc])) p0[iproc] = -std::numeric_limits<double>::max();
-                index_chain[iproc] = mychain;
-                iproc++;
-                mychain++;
-                if (iproc < procnum && mychain < fMCMCNChains) continue;
-            } else if (iproc == 0) break;
-            for(int il = 0; il < iproc ; il++) {
-                //The first entry of the array specifies the task to be executed.
-                sendbuff[il][0] = 1.; // 1 = likelihood calculation
-                for (int im = 1; im < buffsize; im++) sendbuff[il][im] = fMCMCThreadLocalStorage[index_chain[il]].parameters.at(im-1);//fMCMCxvect[il][im-1];
+    // Rank 0 owns all replica states. Workers evaluate the untempered posterior;
+    // the prior is removed/reinserted here so only likelihood is tempered.
+    const unsigned npars = GetNParameters();
+    const int buffsize = npars + 1;
+    std::vector<double> send(procnum * buffsize, 0.), recv(buffsize), values(procnum);
+    bool all_accepted = true;
+    for (unsigned first = 0; first < fMCMCNChains; first += procnum) {
+        std::fill(send.begin(), send.end(), 0.);
+        const unsigned count = std::min<unsigned>(procnum, fMCMCNChains - first);
+        std::vector<bool> valid(count, false);
+        bool any_valid = false;
+        for (unsigned j = 0; j < count; ++j) {
+            const unsigned c = first + j;
+            UpdateChainIndex(c);
+            ++fMCMCStates[c].iteration;
+            std::vector<double>& x = fMCMCThreadLocalStorage[c].parameters;
+            valid[j] = (fMCMCProposeMultivariate && (fMCMCPhase == kMainRun || fMCMCCurrentIteration >= fMCMCNIterationsPreRunFactorized))
+                ? GetProposalPointMetropolis(c, x) : GetProposalPointMetropolis(c, parameter, x);
+            if (valid[j]) {
+                any_valid = true;
+                send[j * buffsize] = 1.;
+                std::copy(x.begin(), x.end(), send.begin() + j * buffsize + 1);
             }
-            for(int il = iproc ; il < procnum; il++) sendbuff[il][0] = 0.; // 0 = nothing to execute
-            
-            MPI_Scatter(sendbuff[0], buffsize, MPI_DOUBLE, recvbuff, buffsize, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-            
-            if (recvbuff[0] == 1.) {
-                pars.assign(recvbuff + 1, recvbuff + buffsize);
-                ll = LogEval(pars);
-            } else ll = log(0.);
-            
-            MPI_Gather(&ll, 1, MPI_DOUBLE, buff[0], 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-
-            for (int j = 0; j < iproc; j++) {
-                // if the new point is more probable, keep it; or else throw dice
-                if (std::isfinite(*buff[j]) && (*buff[j] >= p0[j] || log(fMCMCThreadLocalStorage[index_chain[j]].rng->Rndm()) < (*buff[j] - p0[j]))) {
-                    // accept point
-                    // The next three lines are not in vanilla BAT. This update is done by LogEval (LogProbabilityNN in BCModel) but that does not work for MPI.
-                    fMCMCThreadLocalStorage[index_chain[j]].log_probability = *buff[j]; 
-                    fMCMCThreadLocalStorage[index_chain[j]].log_prior = LogAPrioriProbability(fMCMCThreadLocalStorage[index_chain[j]].parameters);
-                    fMCMCThreadLocalStorage[index_chain[j]].log_likelihood = fMCMCThreadLocalStorage[index_chain[j]].log_probability - fMCMCThreadLocalStorage[index_chain[j]].log_prior;
-                    // Copy everything into the States.
-                    fMCMCStates[index_chain[j]] = fMCMCThreadLocalStorage[index_chain[j]];
-                    // increase efficiency
-                    fMCMCStatistics[index_chain[j]].efficiency[parameter] += (1. - fMCMCStatistics[index_chain[j]].efficiency[parameter]) / (fMCMCStatistics[index_chain[j]].n_samples_efficiency + 1.);
+        }
+        if (any_valid) {
+            MPI_Scatter(send.data(), buffsize, MPI_DOUBLE, recv.data(), buffsize,
+                        MPI_DOUBLE, 0, MPI_COMM_WORLD);
+            double value = -std::numeric_limits<double>::infinity();
+            if (recv[0] == 1.) {
+                UpdateChainIndex(first);
+                const std::vector<double> pars(recv.begin() + 1, recv.end());
+                value = LogEval(pars);
+            }
+            MPI_Gather(&value, 1, MPI_DOUBLE, values.data(), 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+        }
+        for (unsigned j = 0; j < count; ++j) {
+            const unsigned c = first + j;
+            bool accept = false;
+            if (valid[j] && std::isfinite(values[j])) {
+                UpdateChainIndex(c);
+                ThreadLocalStorage& tls = fMCMCThreadLocalStorage[c];
+                const double prior = LogAPrioriProbability(tls.parameters);
+                const double likelihood = values[j] - prior;
+                const ChainState& old = fMCMCStates[c];
+                const double delta = GetParallelTempering()
+                    ? (likelihood - old.log_likelihood) / GetChainTemperature(c) + prior - old.log_prior
+                    : values[j] - old.log_probability;
+                if (std::isfinite(prior) && std::isfinite(likelihood) &&
+                    (delta >= 0. || std::log(tls.rng->Rndm()) < delta)) {
+                    tls.log_probability = values[j];
+                    tls.log_prior = prior;
+                    tls.log_likelihood = likelihood;
+                    fMCMCStates[c] = tls;
                     accept = true;
-                } else {
-                    // else decrease efficiency
-                    fMCMCStatistics[index_chain[j]].efficiency[parameter] *= 1.*fMCMCStatistics[index_chain[j]].n_samples_efficiency / (fMCMCStatistics[index_chain[j]].n_samples_efficiency + 1.);
-                    accept = false;
-                 // if log(likelihood) of proposed point was not a finite number
-                 /* if (!std::isfinite(*buff[j])) {
-                        if (fMCMCProposeMultivariate) {
-                            BCLog::OutDebug(Form("log(probability) evaluated to nan or inf in chain %i while at ", chain));
-                            PrintParameters(fMCMCThreadLocalStorage[index_chain[j]].parameters, BCLog::OutDebug);
-                        } else
-                            BCLog::OutDebug(Form("log(probability) evaluated to nan or inf in chain %i while varying parameter %s to %.3e", chain, GetParameter(parameter).GetName().data(), fMCMCThreadLocalStorage[index_chain[j]].parameters[parameter]));
-                    } HEPfit NOTE: Output suppressed since it is printed too often for flat weights. */
                 }
             }
-            iproc = 0;
-        } else {
-            mychain++;
-            if (mychain < fMCMCNChains) continue;
-            else last = true;
-            accept = false;
+            double& efficiency = fMCMCStatistics[c].efficiency[parameter];
+            efficiency += ((accept ? 1. : 0.) - efficiency) /
+                          (fMCMCStatistics[c].n_samples_efficiency + 1.);
+            UpdateChainIndex(c);
+            MCMCCurrentPointInterface(fMCMCThreadLocalStorage[c].parameters, c, accept);
+            all_accepted &= accept;
         }
-        return_value &= accept;
-        MCMCCurrentPointInterface(fMCMCThreadLocalStorage[mychain].parameters, mychain, accept);
     }
-    
-    delete sendbuff[0];
-    delete [] sendbuff;
-    delete [] recvbuff;
-    delete buff[0];
-    delete [] buff;
-    
-    return return_value;
+    return all_accepted;
 }
 
 // --------------------------------------------------------
@@ -1725,14 +1946,13 @@ bool BCEngineMCMC::GetNewPointMetropolis()
 {
     bool return_value = true;
 
-    if (!fMCMCProposeMultivariate || fMCMCCurrentIteration < fMCMCNIterationsPreRunFactorized) {
+    if (!fMCMCProposeMultivariate || (fMCMCPhase != kMainRun && fMCMCCurrentIteration < fMCMCNIterationsPreRunFactorized)) {
         /* run over parameters one at a time */
 
         for (unsigned ipar = 0; ipar < GetNParameters(); ++ipar) {
             if (GetParameter(ipar).Fixed())
                 continue;
             /* Begin MPI MOD */
-            #pragma omp parallel for schedule(static)
             return_value &= GetChosenNewPointMetropolis(ipar);
             /* End MPI MOD */
         }
@@ -1740,7 +1960,6 @@ bool BCEngineMCMC::GetNewPointMetropolis()
     } else {
         /* Begin MPI MOD */
         /* run over all pars at once */
-        #pragma omp parallel for schedule(static)
         return_value &= GetChosenNewPointMetropolis();
         /* End MPI MOD */
     }
@@ -1750,6 +1969,8 @@ bool BCEngineMCMC::GetNewPointMetropolis()
         fMCMCStatistics[c].n_samples_efficiency += 1;
 
     ++fMCMCCurrentIteration;
+    if (GetParallelTempering() && fMCMCCurrentIteration % fPT.swap_interval == 0)
+        ExchangeReplicas();
     return return_value; // HEPfit note: return_value is unused anywhere in BCEngineMCMC
 }
 
@@ -1789,7 +2010,7 @@ void BCEngineMCMC::InChainFillHistograms(const ChainState& cs)
 void BCEngineMCMC::InChainFillHistograms()
 {
     // loop over chains
-    for (unsigned c = 0; c < fMCMCNChains; ++c)
+    for (unsigned c = 0; c < GetNColdChains(); ++c)
         InChainFillHistograms(fMCMCStates[c]);
 }
 
@@ -1807,7 +2028,7 @@ void BCEngineMCMC::InChainFillTree(const ChainState& cs, unsigned chain_number)
 void BCEngineMCMC::InChainFillTree()
 {
     // loop over all chains
-    for (unsigned i = 0; i < fMCMCNChains; ++i)
+    for (unsigned i = 0; i < GetNColdChains(); ++i)
         InChainFillTree(fMCMCStates[i], i);
 }
 
@@ -1832,6 +2053,12 @@ void BCEngineMCMC::CloseOutputFile()
 // --------------------------------------------------------
 bool BCEngineMCMC::MetropolisPreRun()
 {
+    if (!fProposalCache.input.empty()) {
+        InitializeFromProposalFunction();
+        if (!fProposalCache.output.empty()) SaveProposalFunction(fProposalCache.output);
+        return true;
+    }
+    fProposalCache.loaded = false;
     // print on screen
     BCLog::OutSummary(Form("Pre-run Metropolis MCMC for model \"%s\" ...", GetName().data()));
 
@@ -1842,8 +2069,10 @@ bool BCEngineMCMC::MetropolisPreRun()
     if (!fMCMCOutputFile && fMCMCFlagWritePreRunToFile) // HEPfit Note: Modification required to access Root tree from HEPfit consistently.
         InitializeMarkovChainTree();
 
-    // perform run
-    BCLog::OutSummary(Form(" --> Perform MCMC pre-run with %i chains, each with maximum %i iterations", fMCMCNChains, fMCMCNIterationsPreRunMax));
+    // Adapt every temperature slot, but compare convergence only at T=1.
+    BCLog::OutSummary(Form(" --> Perform MCMC pre-run with %i replica slots (%i cold), each with maximum %i iterations", fMCMCNChains, GetNColdChains(), fMCMCNIterationsPreRunMax));
+    if (GetParallelTempering() && GetNColdChains() == 1)
+        BCLog::OutWarning("PT: one cold chain; between-chain convergence cannot be checked.");
 
     const int old_error_ignore_level = gErrorIgnoreLevel;
 
@@ -1912,10 +2141,10 @@ bool BCEngineMCMC::MetropolisPreRun()
     while (fMCMCCurrentIteration < (int)fMCMCNIterationsPreRunMax
             && (fMCMCCurrentIteration < (int)fMCMCNIterationsPreRunMin
                 || (!allEfficient && inefficientScalesAdjustable)
-                || (fMCMCNChains > 1 && fMCMCNIterationsConvergenceGlobal < 0))) {
+                || (GetNColdChains() > 1 && fMCMCNIterationsConvergenceGlobal < 0))) {
 
         // Generate (nIterationsCheckConvergence) new points in each chain
-        for (unsigned i = 0; i < ((fMCMCProposeMultivariate && fMCMCCurrentIteration < fMCMCNIterationsPreRunFactorized) ? nIterationsPreRunCheck / GetParameters().GetNFreeParameters() : nIterationsPreRunCheck ) && fMCMCCurrentIteration < (int)fMCMCNIterationsPreRunMax; ++i) {
+        for (unsigned i = 0; i < ((fMCMCProposeMultivariate && fMCMCCurrentIteration < fMCMCNIterationsPreRunFactorized) ? std::max(1u, nIterationsPreRunCheck / GetParameters().GetNFreeParameters()) : nIterationsPreRunCheck ) && fMCMCCurrentIteration < (int)fMCMCNIterationsPreRunMax; ++i) {
             // get new point & calculate observables
             GetNewPointMetropolis();
             EvaluateObservables();
@@ -2052,27 +2281,27 @@ bool BCEngineMCMC::MetropolisPreRun()
 
         /////////////////////////////////////////////
         // Check convergence
-        if (fMCMCNChains > 1) {
+        if (GetNColdChains() > 1) {
 
             // Calculate & check R values
             fMCMCNIterationsConvergenceGlobal = fMCMCCurrentIteration;
             for (unsigned p = 0; p < GetNParameters(); ++p) {
                 if (GetParameter(p).Fixed())
                     continue;
-                std::vector<double> means(fMCMCNChains, 0);
-                std::vector<double> variances(fMCMCNChains, 0);
-                for (unsigned c = 0; c < fMCMCNChains; ++c) {
+                std::vector<double> means(GetNColdChains(), 0);
+                std::vector<double> variances(GetNColdChains(), 0);
+                for (unsigned c = 0; c < GetNColdChains(); ++c) {
                     means[c]     = fMCMCStatistics[c].mean[p];
                     variances[c] = fMCMCStatistics[c].variance[p];
                 }
                 fMCMCRValueParameters[p] = RValue(means, variances, fMCMCStatistics[0].n_samples, fCorrectRValueForSamplingVariability);
-                if (fMCMCRValueParameters[p] > fMCMCRValueParametersCriterion)
+                if (!std::isfinite(fMCMCRValueParameters[p]) || fMCMCRValueParameters[p] > fMCMCRValueParametersCriterion)
                     fMCMCNIterationsConvergenceGlobal = -1;
             }
 
             // output results if not converged
             if (fMCMCNIterationsConvergenceGlobal <= 0) {
-                BCLog::OutDetail(Form("     * Convergence status: Set of %i Markov chains did not converge after %i iterations.", fMCMCNChains, fMCMCCurrentIteration));
+                BCLog::OutDetail(Form("     * Convergence status: Set of %i Markov chains did not converge after %i iterations.", GetNColdChains(), fMCMCCurrentIteration));
                 BCLog::OutDetail(Form("       - %-*s :  R-Value", fParameters.MaxNameLength(), "Parameter"));
 
                 for (unsigned p = 0; p < GetNParameters(); ++p) {
@@ -2095,7 +2324,7 @@ bool BCEngineMCMC::MetropolisPreRun()
         ++nChecks;              // increase number of checks made
 
         // scales have not been adjusted and convergence has been reached (or only one chain used)
-        if (!scalesAdjusted && (fMCMCNChains == 1 || fMCMCNIterationsConvergenceGlobal > 0)) {
+        if (!scalesAdjusted && (GetNColdChains() == 1 || fMCMCNIterationsConvergenceGlobal > 0)) {
             if (fMCMCCurrentIteration < (int)fMCMCNIterationsPreRunMin)
                 // still below minimum number of prerun iterations
                 BCLog::OutDetail(Form("     * Running until at least %d iterations performed in prerun. Current iteration is %d", fMCMCNIterationsPreRunMin, fMCMCCurrentIteration));
@@ -2127,24 +2356,24 @@ bool BCEngineMCMC::MetropolisPreRun()
     // output results of prerun concerning convergence and scale adjustment
     if (fMCMCNIterationsConvergenceGlobal > 0) {
         if (allEfficient)
-            BCLog::OutSummary(Form(" --> Set of %i Markov chains converged within %i iterations, and all scales are adjusted.", fMCMCNChains, fMCMCNIterationsConvergenceGlobal));
+            BCLog::OutSummary(Form(" --> Set of %i Markov chains converged within %i iterations, and all scales are adjusted.", GetNColdChains(), fMCMCNIterationsConvergenceGlobal));
         else if (!inefficientScalesAdjustable)
-            BCLog::OutSummary(Form(" --> Set of %i Markov chains converged within %i iterations, but could not adjust all scales (scale limits reached).", fMCMCNChains, fMCMCNIterationsConvergenceGlobal));
+            BCLog::OutSummary(Form(" --> Set of %i Markov chains converged within %i iterations, but could not adjust all scales (scale limits reached).", GetNColdChains(), fMCMCNIterationsConvergenceGlobal));
         else
-            BCLog::OutSummary(Form(" --> Set of %i Markov chains converged within %i iterations, but could not adjust all scales (maximum number of iterations reached).", fMCMCNChains, fMCMCNIterationsConvergenceGlobal));
+            BCLog::OutSummary(Form(" --> Set of %i Markov chains converged within %i iterations, but could not adjust all scales (maximum number of iterations reached).", GetNColdChains(), fMCMCNIterationsConvergenceGlobal));
         if (fMCMCProposeMultivariate)
             BCLog::OutSummary(Form(" --> %i updates to multivariate proposal function's covariances were made.", fMultivariateCovarianceUpdates));
     } else if (allEfficient)
-        BCLog::OutSummary(Form(" --> Set of %i Markov chains did not converge within %i iterations, but all scales are adjusted.", fMCMCNChains, fMCMCNIterationsPreRunMax));
+        BCLog::OutSummary(Form(" --> Set of %i Markov chains did not converge within %i iterations, but all scales are adjusted.", GetNColdChains(), fMCMCNIterationsPreRunMax));
     else if (!inefficientScalesAdjustable)
-        BCLog::OutSummary(Form(" --> Set of %i Markov chains did not converge within %i iterations, and could not adjust all scales (scale limits reached).", fMCMCNChains, fMCMCNIterationsPreRunMax));
+        BCLog::OutSummary(Form(" --> Set of %i Markov chains did not converge within %i iterations, and could not adjust all scales (scale limits reached).", GetNColdChains(), fMCMCNIterationsPreRunMax));
     else
-        BCLog::OutSummary(Form(" --> Set of %i Markov chains did not converge within %i iterations, and could not adjust all scales.", fMCMCNChains, fMCMCNIterationsPreRunMax));
+        BCLog::OutSummary(Form(" --> Set of %i Markov chains did not converge within %i iterations, and could not adjust all scales.", GetNColdChains(), fMCMCNIterationsPreRunMax));
 
 
     // combine statistics:
     fMCMCStatistics_AllChains.Reset();
-    for (unsigned c = 0; c < fMCMCNChains; ++c)
+    for (unsigned c = 0; c < GetNColdChains(); ++c)
         fMCMCStatistics_AllChains += fMCMCStatistics[c];
 
     if (fMCMCProposeMultivariate && fMCMCCurrentIteration >= fMCMCNIterationsPreRunFactorized) {
@@ -2165,6 +2394,8 @@ bool BCEngineMCMC::MetropolisPreRun()
             BCLog::OutDetail(Form("         %-*s :          % 6.4g %%        %4.1f %%", fParameters.MaxNameLength(), GetParameter(i).GetName().data(), 100.*scalefactors, 100.*fMCMCStatistics_AllChains.efficiency[i]));
         }
     }
+
+    if (!fProposalCache.output.empty()) SaveProposalFunction(fProposalCache.output);
 
     // reset current iteration
     fMCMCCurrentIteration = -1;
@@ -2348,6 +2579,7 @@ bool BCEngineMCMC::Metropolis()
 
     // set phase and cycle number
     fMCMCPhase = BCEngineMCMC::kMainRun;
+    ResetReplicaExchangeStatistics();
 
     BCLog::OutSummary(Form(" --> Perform MCMC run with %i chains, each with %i iterations.", fMCMCNChains, fMCMCNIterationsRun));
 
@@ -2389,7 +2621,7 @@ bool BCEngineMCMC::Metropolis()
     // reset total stats
     fMCMCStatistics_AllChains.Reset();
     // add in individual chain stats
-    for (unsigned c = 0; c < fMCMCStatistics.size(); ++c)
+    for (unsigned c = 0; c < GetNColdChains(); ++c)
         fMCMCStatistics_AllChains += fMCMCStatistics[c];
 
     // print efficiencies
@@ -2399,7 +2631,7 @@ bool BCEngineMCMC::Metropolis()
         for (unsigned c = 0; c < fMCMCNChains; ++c)
             BCLog::OutDetail(Form("           %3d :     %4.1f %%", c, 100.*fMCMCStatistics[c].efficiency[0]));
     } else {
-        BCLog::OutDetail(Form(" --> Average efficiencies (measured in %u iterations):", fMCMCStatistics_AllChains.n_samples_efficiency / fMCMCNChains));
+        BCLog::OutDetail(Form(" --> Average efficiencies (measured in %u iterations):", fMCMCStatistics_AllChains.n_samples_efficiency / GetNColdChains()));
         BCLog::OutDetail(Form("       - %-*s : Efficiency", fParameters.MaxNameLength(), "Parameter"));
         for (unsigned i = 0; i < GetNParameters(); ++i) {
             if (GetParameter(i).Fixed())
@@ -2473,6 +2705,10 @@ void BCEngineMCMC::ResetResults()
 // --------------------------------------------------------
 void BCEngineMCMC::MCMCInitialize()
 {
+    if (fMCMCNChains == 0 || (!fPT.temperatures.empty() &&
+        fMCMCNChains % fPT.temperatures.size() != 0))
+        throw std::invalid_argument("MCMC: chain count must be a positive multiple of the temperature count");
+    ResetReplicaExchangeStatistics();
     // reset phase
     fMCMCPhase = BCEngineMCMC::kUnsetPhase;
 
@@ -2932,7 +3168,9 @@ void BCEngineMCMC::PrintMarginalizationSummary() const
         } else
             BCLog::OutSummary(" Convergence reached:                    no");
 
-        BCLog::OutSummary(Form(" Number of chains:                       %u", fMCMCNChains));
+        BCLog::OutSummary(Form(" Number of posterior chains (T=1):       %u", GetNColdChains()));
+        if (GetParallelTempering())
+            BCLog::OutSummary(Form(" Total replicas including hot chains:    %u", GetNChains()));
         BCLog::OutSummary(Form(" Number of iterations per chain:         %u", fMCMCNIterationsRun));
 
         if (fMCMCProposeMultivariate) {

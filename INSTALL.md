@@ -8,11 +8,7 @@ Platforms
 ----------
 
 BAT has been developed on Linux. The installation, unit tests, and
-examples are run and known to work on Linux and Mac OS X. On Linux, we
-test with gcc and on Mac OS X we use clang but both compilers should
-work on either platform.
-
-Windows is not supported.
+examples are run and known to work on Linux and Mac OS X. 
 
 Dependencies
 -------------
@@ -22,40 +18,21 @@ a terminal.
 
 ### Required: Basic tools
 
-BAT itself uses only C++03 features. Compilation and tests work
-fine with gcc >= 4.3 and clang >= 3.3. But recent versions of ROOT
-(see below) may require a C++11 compliant compiler.
-
-Under Debian or Ubuntu, you can install the essential requirements with
-
-    sudo apt-get install build-essential curl
-
-In order to use the development version of BAT instead of an official
-release, some more packages are needed
-
-    sudo apt-get install autoconf automake git-core libtool
-
 Building and installing works with autoconf >= 2.63 and automake >= 1.10. To run
 the tests, a more recent automake version is needed, v1.15 is known to be
-sufficient.
+sufficient. Alternatively, the core libraries can be build with CMake (recommended).
 
 ### Required: ROOT
 
 ROOT is an object-oriented data-analysis framework. At http://root.cern.ch/, you
 can obtain the source code as well as binary distributions for a number of Linux
 distributions and Mac OS X versions. We advise to download the latest production
-release of ROOT. BAT is compatible with ROOT >=5.34.19 and ROOT 6. We regularly
-run unit tests with ROOT 5 and ROOT 6 to ensure backward compatibility.
+release of ROOT. BAT is compatible with ROOT 6. 
 
-On Linux, an alternative is to check your package manager for the availability
-of ROOT packages. Usually these packages are rather old but often they are good
-enough to build BAT. For example on Ubuntu systems up to 16.04, you can
-conveniently install the requirements with
+### Required: openMPI
 
-    sudo apt-get install libroot-graf2d-postscript-dev libroot-graf3d-g3d-dev\
-                         libroot-math-foam-dev libroot-math-minuit-dev\
-                         libroot-math-physics-dev libroot-math-mathmore-dev\
-                         libroot-roofit-dev root-system-bin
+
+
 
 #### Note
 
