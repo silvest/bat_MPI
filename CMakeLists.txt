@@ -56,3 +56,21 @@ if(BAT_BUILD_PT_TESTS)
     set_tests_properties(Proposal_${case} PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
   endforeach()
 endif()
+
+if(BAT_BUILD_PT_TESTS)
+  add_executable(PTTransport_MPI_TEST test/PTTransport_MPI_TEST.cxx)
+  target_link_libraries(PTTransport_MPI_TEST PRIVATE BAT::BAT MPI::MPI_CXX)
+  add_test(NAME PT_transport COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 1
+    ${MPIEXEC_PREFLAGS} $<TARGET_FILE:PTTransport_MPI_TEST> ${MPIEXEC_POSTFLAGS})
+  set_tests_properties(PT_transport PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
+endif()
+
+# Optional statistical diagnostic tests use an isolated Python environment;
+# the core sampler does not acquire a Python runtime dependency.
+set(BAT_DIAGNOSTICS_PYTHON "" CACHE FILEPATH "Python with diagnostics/requirements.txt installed")
+if(BAT_BUILD_PT_TESTS AND BAT_DIAGNOSTICS_PYTHON)
+  add_test(NAME MCMC_diagnostics COMMAND ${BAT_DIAGNOSTICS_PYTHON}
+    ${CMAKE_SOURCE_DIR}/test/test_mcmc_diagnostics.py)
+  set_tests_properties(MCMC_diagnostics PROPERTIES TIMEOUT 120
+    ENVIRONMENT "MPLCONFIGDIR=${CMAKE_BINARY_DIR}/diagnostics-mpl;XDG_CACHE_HOME=${CMAKE_BINARY_DIR}/diagnostics-cache;PYTHONDONTWRITEBYTECODE=1")
+endif()

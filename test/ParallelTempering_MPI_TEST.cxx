@@ -121,13 +121,14 @@ int main(int argc, char** argv) {
             TFile f(filename.c_str(),"READ");
             auto tree=dynamic_cast<TTree*>(f.Get("pt_test_mcmc"));
             check(tree && tree->GetEntries()==80000,"wrong number of saved cold samples");
-            unsigned chain; double x, ll, lp, logp;
-            tree->SetBranchAddress("Chain",&chain); tree->SetBranchAddress("x",&x);
+            unsigned chain, replica; double x, ll, lp, logp;
+            tree->SetBranchAddress("Chain",&chain); tree->SetBranchAddress("Replica",&replica); tree->SetBranchAddress("x",&x);
             tree->SetBranchAddress("LogLikelihood",&ll); tree->SetBranchAddress("LogPrior",&lp);
             tree->SetBranchAddress("LogProbability",&logp);
             for(Long64_t row=0;row<tree->GetEntries();++row) {
                 tree->GetEntry(row);
                 check(chain<2,"hot chain in output tree");
+                check(replica<m.GetNChains() && replica%2==chain,"saved replica ID inconsistent with independent ladder");
                 check(std::abs(logp-ll-lp)<1e-10,"wrong saved probability");
                 check(std::abs(ll-m.LogLikelihood(std::vector<double>(1,x)))<1e-10,"likelihood cache mismatches saved state");
             }

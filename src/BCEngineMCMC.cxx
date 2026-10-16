@@ -782,6 +782,7 @@ void BCEngineMCMC::InitializeMarkovChainTree(bool replacetree, bool replacefile)
         // or create new MCMC tree (under umbrella of output file)
         fMCMCTree = new TTree(TString::Format("%s_mcmc", GetSafeName().data()), TString::Format("%s_mcmc", GetSafeName().data()));
         fMCMCTree->Branch("Chain",          &fMCMCTree_Chain,                 "chain/i");
+        fMCMCTree->Branch("Replica", &fPT.tree_replica, "replica/i");
         fMCMCTree->Branch("Iteration",      &fMCMCTree_State.iteration,       "iteration/i");
         fMCMCTree->Branch("Phase",          &fMCMCPhase,                      "phase/I");
         fMCMCTree->Branch("LogProbability", &fMCMCTree_State.log_probability, "log_probability/D");
@@ -1819,6 +1820,45 @@ void BCEngineMCMC::ResetReplicaExchangeStatistics()
     fPT.attempts.assign(n, 0);
     fPT.accepts.assign(n, 0);
     fPT.exchange_round = 0;
+    const unsigned slots = GetNChains(), ladders = GetNColdChains();
+    fPT.ladder_attempts.assign(n * ladders, 0);
+    fPT.ladder_accepts.assign(n * ladders, 0);
+    fPT.replica_ids.resize(slots);
+    fPT.journey_stage.assign(slots, 0);
+    fPT.journey_start.assign(slots, 0);
+    fPT.round_trips.assign(slots, 0);
+    fPT.trip_sweeps.assign(slots, 0);
+    fPT.min_trip_sweeps.assign(slots, 0);
+    fPT.max_trip_sweeps.assign(slots, 0);
+    for (unsigned c = 0; c < slots; ++c) {
+        fPT.replica_ids[c] = c;
+        // Hot-origin replicas must first visit cold before a trip can start.
+        if (GetParallelTempering() && c < ladders) fPT.journey_stage[c] = 1;
+    }
+}
+
+void BCEngineMCMC::UpdateReplicaJourneys()
+{
+    if (!GetParallelTempering()) return;
+    const unsigned ladders = GetNColdChains();
+    const unsigned long long sweep = fMCMCCurrentIteration;
+    for (unsigned l = 0; l < ladders; ++l) {
+        const unsigned hot = fPT.replica_ids[(fPT.temperatures.size()-1)*ladders+l];
+        if (fPT.journey_stage[hot] == 1) fPT.journey_stage[hot] = 2;
+        const unsigned cold = fPT.replica_ids[l];
+        if (fPT.journey_stage[cold] == 2) {
+            const unsigned long long duration = sweep - fPT.journey_start[cold];
+            if (!fPT.round_trips[cold] || duration < fPT.min_trip_sweeps[cold])
+                fPT.min_trip_sweeps[cold] = duration;
+            fPT.max_trip_sweeps[cold] = std::max(fPT.max_trip_sweeps[cold], duration);
+            ++fPT.round_trips[cold];
+            fPT.trip_sweeps[cold] += duration;
+        }
+        if (fPT.journey_stage[cold] != 1) {
+            fPT.journey_stage[cold] = 1;
+            fPT.journey_start[cold] = sweep;
+        }
+    }
 }
 
 void BCEngineMCMC::ExchangeReplicas()
@@ -1831,6 +1871,7 @@ void BCEngineMCMC::ExchangeReplicas()
         for (unsigned l = 0; l < ladders; ++l) {
             const unsigned a = t * ladders + l, b = (t + 1) * ladders + l;
             ++fPT.attempts[t];
+            ++fPT.ladder_attempts[t*ladders+l];
             const double delta = (1. / fPT.temperatures[t] - 1. / fPT.temperatures[t+1]) *
                                  (fMCMCStates[b].log_likelihood - fMCMCStates[a].log_likelihood);
             if (delta >= 0. || std::log(fMCMCThreadLocalStorage[a].rng->Rndm()) < delta) {
@@ -1841,10 +1882,13 @@ void BCEngineMCMC::ExchangeReplicas()
                 std::swap(fMCMCStates[a].log_likelihood, fMCMCStates[b].log_likelihood);
                 std::swap(fMCMCStates[a].log_prior, fMCMCStates[b].log_prior);
                 std::swap(fMCMCStates[a].log_probability, fMCMCStates[b].log_probability);
+                std::swap(fPT.replica_ids[a], fPT.replica_ids[b]);
                 ++fPT.accepts[t];
+                ++fPT.ladder_accepts[t*ladders+l];
             }
         }
     }
+    UpdateReplicaJourneys();
 }
 
 void BCEngineMCMC::WriteParallelTemperingDiagnostics(const std::string& filename) const
@@ -1856,6 +1900,36 @@ void BCEngineMCMC::WriteParallelTemperingDiagnostics(const std::string& filename
         out << fPT.temperatures[t] << ',' << fPT.temperatures[t+1] << ','
             << fPT.attempts[t] << ',' << fPT.accepts[t] << ','
             << (fPT.attempts[t] ? double(fPT.accepts[t]) / fPT.attempts[t] : 0.) << '\n';
+}
+
+void BCEngineMCMC::WriteParallelTemperingTransport(const std::string& prefix) const
+{
+    if (!GetParallelTempering())
+        throw std::logic_error("Replica transport diagnostics require parallel tempering");
+    std::ofstream trips((prefix + "pt_roundtrips.csv").c_str());
+    std::ofstream swaps((prefix + "pt_swaps_by_ladder.csv").c_str());
+    if (!trips || !swaps) throw std::runtime_error("Cannot write PT transport diagnostics: " + prefix);
+    trips << std::setprecision(17);
+    swaps << std::setprecision(17);
+    trips << "replica,ladder,round_trips,total_sweeps,mean_sweeps,min_sweeps,max_sweeps,journey_stage\n";
+    const unsigned ladders = GetNColdChains();
+    for (unsigned id = 0; id < fPT.round_trips.size(); ++id) {
+        trips << id << ',' << id % ladders << ',' << fPT.round_trips[id] << ',' << fPT.trip_sweeps[id] << ',';
+        if (fPT.round_trips[id]) trips << double(fPT.trip_sweeps[id]) / fPT.round_trips[id] << ','
+            << fPT.min_trip_sweeps[id] << ',' << fPT.max_trip_sweeps[id];
+        else trips << "nan,nan,nan";
+        trips << ',' << fPT.journey_stage[id] << '\n';
+    }
+    swaps << "ladder,temperature_low,temperature_high,attempts,accepted,acceptance_rate\n";
+    for (unsigned t = 0; t < fPT.attempts.size(); ++t)
+        for (unsigned l = 0; l < ladders; ++l) {
+            const unsigned k = t*ladders+l;
+            swaps << l << ',' << fPT.temperatures[t] << ',' << fPT.temperatures[t+1] << ','
+                << fPT.ladder_attempts[k] << ',' << fPT.ladder_accepts[k] << ',';
+            if (fPT.ladder_attempts[k]) swaps << double(fPT.ladder_accepts[k]) / fPT.ladder_attempts[k];
+            else swaps << "nan";
+            swaps << '\n';
+        }
 }
 
 /* Begin MPI MOD */
@@ -2020,6 +2094,7 @@ void BCEngineMCMC::InChainFillTree(const ChainState& cs, unsigned chain_number)
     if (!fMCMCTree)
         return;
     fMCMCTree_Chain = chain_number;
+    fPT.tree_replica = fPT.replica_ids.empty() ? chain_number : fPT.replica_ids.at(chain_number);
     fMCMCTree_State = cs;
     fMCMCTree->Fill();
 }

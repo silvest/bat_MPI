@@ -54,3 +54,12 @@ Directory `bat/`:
 
 Other files distributed with BAT are part of the configuration and
 build system.
+
+## Production MCMC diagnostics
+
+PT runs can record configuration round trips and per-ladder swap counts.
+`diagnostics/analyze_mcmc.py` analyzes cold ROOT samples with ArviZ for modern
+R-hat, ESS, MCSE, and configurable region occupancy. See
+[diagnostics/README.txt](diagnostics/README.txt) for installation, examples,
+interpretation, and regression tests. Python dependencies are optional and
+are not needed by the sampler itself.

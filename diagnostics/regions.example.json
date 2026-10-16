@@ -1,0 +1,7 @@
+{
+  "description": "Generic schema example for a model with a parameter named x. Replace x and the thresholds with scientifically relevant, disjoint mode definitions.",
+  "regions": [
+    {"name": "negative_x", "conditions": [{"parameter": "x", "op": "<", "value": 0}]},
+    {"name": "nonnegative_x", "conditions": [{"parameter": "x", "op": ">=", "value": 0}]}
+  ]
+}

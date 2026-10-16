@@ -296,6 +296,12 @@ public:
     const std::vector<unsigned long long>& GetSwapAccepts() const { return fPT.accepts; }
     /** Main-run swap statistics, aggregated over independent ladders. */
     void WriteParallelTemperingDiagnostics(const std::string& filename) const;
+    /** Production-only transport diagnostics: prefix + pt_roundtrips.csv and
+     * pt_swaps_by_ladder.csv. Replica IDs follow configurations through swaps. */
+    void WriteParallelTemperingTransport(const std::string& prefix) const;
+    const std::vector<unsigned>& GetReplicaIDs() const { return fPT.replica_ids; }
+    const std::vector<unsigned long long>& GetReplicaRoundTrips() const { return fPT.round_trips; }
+
 
     /** Schedule saving the tuned proposal at the end of pre-run (empty disables). */
     void SetProposalFunctionOutput(const std::string& filename)
@@ -1895,10 +1901,16 @@ protected:
         unsigned swap_interval;
         unsigned exchange_round;
         std::vector<unsigned long long> attempts, accepts;
-        ParallelTemperingState() : swap_interval(10), exchange_round(0) {}
+        std::vector<unsigned long long> ladder_attempts, ladder_accepts;
+        std::vector<unsigned> replica_ids, journey_stage;
+        std::vector<unsigned long long> round_trips, journey_start, trip_sweeps, min_trip_sweeps, max_trip_sweeps;
+        unsigned tree_replica;
+
+        ParallelTemperingState() : swap_interval(10), exchange_round(0), tree_replica(0) {}
     };
     ParallelTemperingState fPT;
     void ExchangeReplicas();
+    void UpdateReplicaJourneys();
     void ResetReplicaExchangeStatistics();
 
     struct ProposalCacheSettings {
