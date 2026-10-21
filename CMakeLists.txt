@@ -147,3 +147,11 @@ if(BAT_BUILD_INSTALL_TESTS)
 endif()
 message(STATUS "BAT MPI: models=${BAT_BUILD_MODELS}, MTF=${BAT_BUILD_MTF}, RooStats=${BAT_ENABLE_ROOSTATS}, Cuba=${BAT_ENABLE_CUBA}")
 message(STATUS "BAT installation: ${CMAKE_INSTALL_PREFIX} (${CMAKE_INSTALL_LIBDIR}); CMake is the primary build system")
+
+if(BAT_BUILD_PT_TESTS)
+  add_executable(PTDiagnostics_MPI_TEST test/PTDiagnostics_MPI_TEST.cxx)
+  target_link_libraries(PTDiagnostics_MPI_TEST PRIVATE BAT::BAT MPI::MPI_CXX)
+  add_test(NAME PT_streaming COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 1
+    ${MPIEXEC_PREFLAGS} $<TARGET_FILE:PTDiagnostics_MPI_TEST> ${MPIEXEC_POSTFLAGS})
+  set_tests_properties(PT_streaming PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
+endif()

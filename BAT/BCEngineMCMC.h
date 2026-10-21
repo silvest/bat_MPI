@@ -303,6 +303,29 @@ public:
     const std::vector<unsigned long long>& GetReplicaRoundTrips() const { return fPT.round_trips; }
 
 
+    /** A model-owned partition of parameter space. Labels must be nonempty and unique. */
+    struct PTDiagnosticPartition {
+        std::string name;
+        std::vector<std::string> labels;
+        PTDiagnosticPartition() {}
+        PTDiagnosticPartition(const std::string& n, const std::vector<std::string>& l) : name(n), labels(l) {}
+    };
+    /** Enable bounded-memory, all-temperature diagnostics before MCMC initialization.
+     * Empty prefix disables. Checkpoints are in full sweeps, independent of lag.
+     * trace_sweeps=0 disables decimated state traces. Files are recreated for each run.
+     * Output settings are deliberately not copied with an engine. */
+    void SetPTDiagnosticsOutput(const std::string& prefix, unsigned checkpoint_sweeps = 1000,
+                                unsigned trace_sweeps = 100);
+    /** Model-specific definitions; the generic default records acceptance/transport only. */
+    virtual std::vector<PTDiagnosticPartition> DefinePTDiagnosticPartitions() const
+    { return std::vector<PTDiagnosticPartition>(); }
+    /** Classify a parameter vector without changing model state or consuming randomness.
+     * Fill one zero-based label index per partition. Called at phase initialization
+     * and after accepted local moves. */
+    virtual void ClassifyPTDiagnosticRegions(const std::vector<double>& parameters,
+                                             std::vector<unsigned>& labels) const
+    { labels.clear(); }
+
     /** Schedule saving the tuned proposal at the end of pre-run (empty disables). */
     void SetProposalFunctionOutput(const std::string& filename)
     { fProposalCache.output = filename; }
@@ -1912,6 +1935,39 @@ protected:
     void ExchangeReplicas();
     void UpdateReplicaJourneys();
     void ResetReplicaExchangeStatistics();
+
+    struct PTDiagnosticSlot {
+        unsigned long long attempts[2], accepted[2], invalid[2], nonfinite[2];
+        std::vector<unsigned> regions;
+        std::vector<unsigned long long> occupancy, local_changes, swap_changes;
+        PTDiagnosticSlot() { ClearMoves(); }
+        void ClearMoves() {
+            for (unsigned i = 0; i < 2; ++i) attempts[i] = accepted[i] = invalid[i] = nonfinite[i] = 0;
+        }
+    };
+    struct PTDiagnosticState {
+        std::string prefix, phase;
+        unsigned checkpoint_sweeps, trace_sweeps;
+        bool initialized, active;
+        unsigned long long sweep, window_start, block;
+        unsigned nregions, ntransitions;
+        std::vector<PTDiagnosticPartition> partitions;
+        std::vector<unsigned> region_offsets, transition_offsets, scratch, departure_regions;
+        std::vector<PTDiagnosticSlot> slots;
+        std::vector<unsigned long long> swap_attempts, swap_accepts, trip_regions;
+        PTDiagnosticState() : checkpoint_sweeps(1000), trace_sweeps(100), initialized(false), active(false),
+            sweep(0), window_start(0), block(0), nregions(0), ntransitions(0) {}
+    };
+    PTDiagnosticState fPTDiagnostics;
+    void BeginPTDiagnostics(const std::string& phase);
+    void EndPTDiagnostics();
+    void FinishPTDiagnosticsSweep();
+    void RecordPTDiagnosticLocalMove(unsigned slot, bool multivariate, bool valid, bool finite, bool accepted);
+    void RecordPTDiagnosticSwap(unsigned a, unsigned b, bool accepted);
+    void RecordPTDiagnosticRoundTrip(unsigned replica, unsigned cold_slot);
+    void ClassifyPTDiagnosticState(const std::vector<double>& parameters, std::vector<unsigned>& labels) const;
+    void FlushPTDiagnostics(bool complete);
+    void WritePTDiagnosticTrace();
 
     struct ProposalCacheSettings {
         std::string input, output;

@@ -32,6 +32,12 @@ public:
         double m = std::max(a,b);
         return m + std::log(std::exp(a-m) + std::exp(b-m));
     }
+    std::vector<PTDiagnosticPartition> DefinePTDiagnosticPartitions() const override {
+        return {{"sign", {"negative", "positive"}}};
+    }
+    void ClassifyPTDiagnosticRegions(const std::vector<double>& p, std::vector<unsigned>& labels) const override {
+        labels.assign(1, p.at(0)<0. ? 0 : 1);
+    }
     void MCMCUserIterationInterface() override {
         if (sum.empty()) { sum.assign(GetNChains(),0.); positive.assign(GetNChains(),0.); }
         if (!samples) main_start_callbacks = callbacks - GetNChains();
@@ -86,6 +92,7 @@ int main(int argc, char** argv) {
             }
             m.SetNChains(2);
             if(!disabled) m.SetParallelTempering(two?std::vector<double>{1.,9.}:std::vector<double>{1.,3.,9.,27.},2,5);
+            if(scenario=="partial") m.SetPTDiagnosticsOutput("partial_stream_",1000,100);
             m.SetRandomSeed(71357);
             m.SetProposeMultivariate(scenario!="serial" && !disabled);
             m.SetProposalFunctionDof(0.);

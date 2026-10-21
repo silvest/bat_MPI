@@ -6,6 +6,7 @@ ESS/MCSE. No reimplementation of the statistical estimators is used.
 Region conditions are data (no Python expression evaluation).
 """
 import argparse
+import importlib.util
 import csv
 import json
 import math
@@ -19,6 +20,28 @@ with warnings.catch_warnings():
     import arviz as az
 import numpy as np
 import uproot
+
+# Load beside this script, including when imported by an external test runner.
+_pt_spec = importlib.util.spec_from_file_location('bat_pt_diagnostics', Path(__file__).with_name('pt_diagnostics.py'))
+_pt_module = importlib.util.module_from_spec(_pt_spec)
+_pt_spec.loader.exec_module(_pt_module)
+analyze_streams = _pt_module.analyze_streams
+
+
+def analyze_pt_only(args):
+    prefixes = args.transport_prefix or [str(p)[:-len('cold_chains.root')] for p in args.inputs if str(p).endswith('cold_chains.root')]
+    if not prefixes:
+        raise ValueError('--pt-only requires --transport-prefix (or a conventional cold_chains.root filename)')
+    stream = analyze_streams(prefixes, args.output, args.no_plots, args.trace_points)
+    status = 'attention' if stream['issues'] else 'transport_checked' if stream['available'] else 'incomplete'
+    report = dict(status=status, streaming_pt=stream,
+                  note='PT transport only: cold-chain R-hat, ESS and posterior region weights were not checked.')
+    output = Path(args.output)
+    (output/'summary.json').write_text(json.dumps(finite_json(report), indent=2, allow_nan=False)+'\n')
+    lines = [f'PT transport: {status}', *stream['issues'], report['note']]
+    (output/'summary.txt').write_text('\n'.join(lines)+'\n')
+    print('\n'.join(lines))
+    return report
 
 RESERVED = {"Chain", "Iteration", "Phase", "Replica", "Temperature"}
 OPS = {"<": operator.lt, "<=": operator.le, ">": operator.gt,
@@ -336,6 +359,8 @@ def make_plots(outdir, data, iterations, chain_names, regions, cumulative, trans
 def analyze(args):
     outdir = Path(args.output)
     outdir.mkdir(parents=True, exist_ok=True)
+    if getattr(args, 'pt_only', False):
+        return analyze_pt_only(args)
     data, chain_names, iterations, fixed = load_cold(args.inputs, args.tree)
     if not data:
         raise ValueError("No numerical variables")
@@ -378,6 +403,7 @@ def analyze(args):
     prefixes = args.transport_prefix
     if not prefixes:
         prefixes = [str(p)[:-len("cold_chains.root")] for p in args.inputs if str(p).endswith("cold_chains.root")]
+    streaming_pt = analyze_streams(prefixes, outdir, args.no_plots, args.trace_points)
     trips, swaps, missing_transport = read_transport(prefixes)
     transport_flags = []
     for run, ladder in sorted({(r["run"], r["ladder"]) for r in trips}):
@@ -393,6 +419,7 @@ def analyze(args):
         attempts, accepts = int(row["attempts"]), int(row["accepted"])
         if attempts == 0 or accepts == 0:
             transport_flags.append(f"run {row['run']} ladder {row['ladder']}: no swaps for {row['temperature_low']}–{row['temperature_high']}")
+    transport_flags.extend(streaming_pt["issues"])
     csv_write(outdir / "diagnostics.csv", summaries)
     csv_write(outdir / "region_weights.csv", region_rows)
     csv_write(outdir / "region_weights_by_chain.csv", ladder_rows)
@@ -406,7 +433,7 @@ def analyze(args):
                   inputs=[str(p) for p in args.inputs], chains=chain_names, draws_per_chain=n,
                   thresholds=dict(rhat=args.rhat_limit, ess_per_chain=args.ess_per_chain, region_mcse=args.region_mcse),
                   arviz_version=az.__version__, issues=issues, transport_issues=transport_flags,
-                  missing_transport=missing_transport, skipped_optional_partitions=skipped,
+                  streaming_pt=streaming_pt, missing_transport=missing_transport, skipped_optional_partitions=skipped,
                   regions_config=config, note="These checks cannot establish that every relevant mode was discovered. Missing transport or regions means those checks were not performed.")
     (outdir / "summary.json").write_text(json.dumps(finite_json(report), indent=2, allow_nan=False) + "\n")
     lines = [f"Diagnostic screening: {report['status']}", f"Cold chains: {m}; production draws per chain: {n}",
@@ -431,7 +458,8 @@ def analyze(args):
 
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("inputs", nargs="+", type=Path, help="Independent cold-chain ROOT files")
+    p.add_argument("inputs", nargs="*", type=Path, help="Independent cold-chain ROOT files")
+    p.add_argument("--pt-only", action="store_true", help="Analyze committed streaming PT files without opening cold ROOT output")
     p.add_argument("--output", required=True, help="Directory for diagnostic tables/plots")
     p.add_argument("--tree", help="MCMC TTree name (auto-detected if unique)")
     p.add_argument("--regions", help="JSON with named disjoint regions and/or binary partitions")
@@ -451,6 +479,8 @@ def parser():
 def main():
     p = parser()
     args = p.parse_args()
+    if not args.inputs and not args.pt_only:
+        p.error("Provide cold-chain ROOT inputs or use --pt-only")
     if args.blocks < 1 or args.trace_points < 2 or not math.isfinite(args.rhat_limit) or args.rhat_limit < 1 or not math.isfinite(args.ess_per_chain) or args.ess_per_chain <= 0 or not math.isfinite(args.region_mcse) or args.region_mcse <= 0:
         p.error("Invalid diagnostic limits/block/trace settings")
     try:

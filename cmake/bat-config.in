@@ -18,7 +18,7 @@ for option do
     --bindir) printf '%s\n' "$script_dir" ;;
     --incdir) printf '%s\n' "$incdir" ;;
     --libdir) printf '%s\n' "$libdir" ;;
-    --features) printf '%s\n' 'MPI PT proposal-cache transport-diagnostics models=@BAT_BUILD_MODELS@ mtf=@BAT_BUILD_MTF@ RooStats=@BAT_ENABLE_ROOSTATS@ Cuba=@BAT_ENABLE_CUBA@ OpenMP=@BAT_ENABLE_OPENMP@' ;;
+    --features) printf '%s\n' 'MPI PT proposal-cache transport-diagnostics pt-streaming models=@BAT_BUILD_MODELS@ mtf=@BAT_BUILD_MTF@ RooStats=@BAT_ENABLE_ROOSTATS@ Cuba=@BAT_ENABLE_CUBA@ OpenMP=@BAT_ENABLE_OPENMP@' ;;
     --help) echo 'Usage: bat-config --prefix|--version|--cflags|--libs|--bindir|--incdir|--libdir|--features' ;;
     *) echo "Unknown bat-config option: $option" >&2; exit 1 ;;
   esac

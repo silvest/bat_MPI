@@ -22,6 +22,7 @@ int main(int argc, char** argv)
         model.AddParameter("x", -2., 2.);
         model.SetPriorConstantAll();
         model.SetParallelTempering({1., 2.}, 2, 5);
+        model.SetPTDiagnosticsOutput("consumer_stream_",10,0);
         if (model.GetNChains() != 4 || model.GetNColdChains() != 2)
             throw std::runtime_error("Installed PT API mismatch");
 #ifdef TEST_MODELS

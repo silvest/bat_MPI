@@ -123,10 +123,16 @@ int main(int argc,char** argv) {
                 require(rejected && m.untouched(),"incompatible proposal not rejected before initialization");
             }
             Model loaded; configure(loaded,multi,pt); loaded.SetRandomSeed(97531);
+            if(pt) loaded.SetPTDiagnosticsOutput("loaded_stream_",1000,0);
             loaded.LoadProposalFunction(file,500);
             // Save a second copy only after the discarded warm-up has succeeded.
             loaded.SetProposalFunctionOutput(file+".reused");
             loaded.MarginalizeAll(BCIntegrate::kMargMetropolis);
+            if(pt) {
+                std::ifstream warmup("loaded_stream_pt_progress_warmup.csv");
+                std::string header, row; std::getline(warmup,header); std::getline(warmup,row);
+                require(row.find("warmup,500,1,")==0,"loaded warm-up phase missing");
+            }
             require(loaded.GetProposalFunctionLoaded(),"proposal not loaded");
             require(loaded.kernel()==kernel,"proposal changed during reload or fixed warm-up/production");
             require(loaded.GetNIterationsConvergenceGlobal()==-1,"old convergence result inherited");

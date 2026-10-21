@@ -79,6 +79,7 @@ $(nodist_library_include_HEADERS): .includes/$(PACKAGE)/%.h: $(top_srcdir)/BAT/%
 	sed 's|include \"\(BC.*.h\)\"|include <'$(PACKAGE)'\/\1>| ; s/include \"\.\.\/\.\.\/\('$(PACKAGE)'\/BC.*.h\)\"/include <\1>/' $< > $@
 
 libBAT_la_SOURCES= \
+	PTDiagnostics.cxx \
 	$(incs:.h=.cxx)
 
 nodist_libBAT_la_SOURCES= \

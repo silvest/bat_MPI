@@ -43,7 +43,8 @@ file(RELATIVE_PATH BAT_PC_TO_PREFIX "/${CMAKE_INSTALL_LIBDIR}/pkgconfig" "/")
 configure_file(cmake/bat.pc.in "${PROJECT_BINARY_DIR}/bat.pc" @ONLY)
 install(PROGRAMS "${PROJECT_BINARY_DIR}/bat-config" DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES "${PROJECT_BINARY_DIR}/bat.pc" DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
-install(DIRECTORY diagnostics/ DESTINATION ${CMAKE_INSTALL_DATADIR}/BAT/diagnostics)
+install(DIRECTORY diagnostics/ DESTINATION ${CMAKE_INSTALL_DATADIR}/BAT/diagnostics
+  PATTERN "__pycache__" EXCLUDE PATTERN "*.pyc" EXCLUDE PATTERN ".gitignore" EXCLUDE)
 install(FILES README.md INSTALL.md doc/COPYING doc/LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/BAT)
 
 set(datadir "\$(CDPATH= cd -- \"\$(dirname -- \"\$0\")/${BAT_BINDIR_TO_PREFIX}/${CMAKE_INSTALL_DATADIR}/BAT\" && pwd)")

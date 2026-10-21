@@ -230,5 +230,114 @@ class RootAndRegions(unittest.TestCase):
         self.assertEqual(report["status"], "incomplete")
 
 
+class StreamingPTDiagnostics(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.directory = Path(self.tmp.name)
+        self.prefix = self.directory/'run_'
+        self.output = self.directory/'report'
+        self.pt = diag._pt_module
+        self.table('pt_partitions.csv', ['partition_index','partition','region_index','region'],
+                   [[0,'sign',0,'negative'],[0,'sign',1,'positive']])
+        common = ['phase','block','first_sweep','last_sweep']
+        ledger, moves, occ, changes, swaps, trips = [], [], [], [], [], []
+        for phase in ('prerun','warmup','production'):
+            self.table(f'pt_progress_{phase}.csv', ['phase','last_sweep','completed','checkpoint_sweeps','trace_sweeps'], [[phase,3,1,2,0]])
+            for block, first, last in ((0,1,2),(1,3,3)):
+                base = [phase,block,first,last]; ledger.append(base)
+                for ladder in range(2):
+                    swaps.append(base+[ladder,1,4,2,1,.5])
+                    for temp_index, temp in enumerate((1,4)):
+                        slot = temp_index*2+ladder
+                        moves.append(base+[ladder,slot,temp,'factorized',4,2,1,0])
+                        for label in ('negative','positive'):
+                            occ.append(base+[ladder,slot,temp,'sign',label,last-first+1 if (label=='negative')==(ladder==0) else 0,last-first+1,.5])
+                        if temp_index:
+                            changes.append(base+[ladder,slot,temp,'sign','negative','positive','local',3])
+                        else:
+                            changes.append(base+[ladder,slot,temp,'sign','negative','positive','swap',1])
+                    trips.append(base+[ladder,ladder,'sign','negative','positive',1])
+        self.table('pt_checkpoints.csv',common,ledger)
+        self.table('pt_local_moves.csv', common+['ladder','slot','temperature','kernel','attempts','accepted','invalid_proposals','nonfinite_evaluations'], moves)
+        self.table('pt_region_occupancy.csv', common+['ladder','slot','temperature','partition','region','samples','draws','weight'],occ)
+        self.table('pt_region_transitions.csv',common+['ladder','slot','temperature','partition','from_region','to_region','cause','transitions'],changes)
+        self.table('pt_swaps_by_block.csv',common+['ladder','temperature_low','temperature_high','attempts','accepted','acceptance_rate'],swaps)
+        self.table('pt_roundtrip_regions.csv',common+['ladder','replica','partition','departure_region','return_region','round_trips'],trips)
+        self.table('pt_states.csv',['phase','sweep','ladder','slot','temperature','replica','log_likelihood','log_prior','region_0'],[])
+
+    def table(self, suffix, columns, data):
+        with Path(str(self.prefix)+suffix).open('w',newline='') as stream:
+            writer=csv.writer(stream);writer.writerow(columns);writer.writerows(data)
+
+    def run_report(self, plots=False):
+        return self.pt.analyze_streams([self.prefix],self.output,no_plots=not plots)
+
+    def test_phases_exact_counts_and_event_attribution(self):
+        result=self.run_report()
+        self.assertTrue(result['available']);self.assertFalse(result['issues'])
+        observation=result['runs'][0]['observations'][0]
+        self.assertEqual(observation['hottest_local_transitions'],12)
+        self.assertEqual(observation['cold_transitions'],4)
+        self.assertEqual(len(list(self.pt.rows(self.output/'pt_local_acceptance.csv'))),12)
+        returns=list(self.pt.rows(self.output/'pt_region_returns.csv'))
+        self.assertEqual(len(returns),6)
+        self.assertTrue(all(r['changed_region']=='True' and int(r['round_trips'])==2 for r in returns))
+        weights=list(self.pt.rows(self.output/'pt_occupancy.csv'))
+        self.assertTrue(all(int(r['draws'])==3 for r in weights))
+
+    def test_interruption_ignores_uncommitted_tail(self):
+        path=Path(str(self.prefix)+'pt_checkpoints.csv')
+        path.write_text(path.read_text().replace('production,1,3,3\n',''))
+        progress=Path(str(self.prefix)+'pt_progress_production.csv')
+        progress.write_text('phase,last_sweep,completed,checkpoint_sweeps,trace_sweeps\nproduction,2,0,2,0\n')
+        with Path(str(self.prefix)+'pt_local_moves.csv').open('a') as stream:stream.write('production,2,5')
+        result=self.run_report()
+        self.assertGreater(result['runs'][0]['ignored_uncommitted_rows'],0)
+        self.assertTrue(any('interrupted' in issue for issue in result['issues']))
+        self.assertEqual(result['runs'][0]['phases']['production']['last_sweep'],2)
+
+    def test_missing_committed_region_rejected(self):
+        path=Path(str(self.prefix)+'pt_region_occupancy.csv')
+        lines=path.read_text().splitlines(True);path.write_text(''.join(lines[:-1]))
+        with self.assertRaisesRegex(ValueError,'occupancy'):self.run_report()
+
+    def test_missing_entire_committed_slot_rejected(self):
+        path=Path(str(self.prefix)+'pt_region_occupancy.csv')
+        lines=path.read_text().splitlines(True)
+        path.write_text(''.join(line for line in lines if not line.startswith('production,') or ',0,0,1,sign,' not in line))
+        with self.assertRaisesRegex(ValueError,'occupancy'):self.run_report()
+
+    def test_corrupt_swap_count_rejected(self):
+        path=Path(str(self.prefix)+'pt_swaps_by_block.csv')
+        path.write_text(path.read_text().replace(',2,1,0.5',',2,3,0.5'))
+        with self.assertRaisesRegex(ValueError,'swap'):self.run_report()
+
+    def test_run_ids_remain_separate(self):
+        result=self.pt.analyze_streams([self.prefix,self.prefix],self.output,no_plots=True)
+        self.assertEqual([r['run'] for r in result['runs']],[0,1])
+        self.assertEqual({r['run'] for r in self.pt.rows(self.output/'pt_region_returns.csv')},{'0','1'})
+
+    def test_legacy_files_remain_supported(self):
+        result=self.pt.analyze_streams([self.directory/'old_'],self.output,no_plots=True)
+        self.assertFalse(result['available']);self.assertFalse(result['issues'])
+
+    def test_pt_only_report_and_plots(self):
+        args=diag.parser().parse_args(['--pt-only','--transport-prefix',str(self.prefix),'--output',str(self.output)])
+        report=diag.analyze(args)
+        self.assertEqual(report['status'],'transport_checked')
+        self.assertIn('not checked',report['note'])
+        self.assertGreater((self.output/'pt_regions_run0.png').stat().st_size,1000)
+        self.run_report()
+        self.assertFalse((self.output/'pt_regions_run0.png').exists())
+
+    def test_hot_trapping_warning_requires_disagreement(self):
+        path=Path(str(self.prefix)+'pt_region_transitions.csv')
+        lines=path.read_text().splitlines(True)
+        path.write_text(''.join(line for line in lines if ',local,' not in line))
+        result=self.run_report()
+        self.assertTrue(any('hottest ladders disagree' in x for x in result['issues']))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -221,6 +221,7 @@ BCEngineMCMC& BCEngineMCMC::operator=(const BCEngineMCMC& other)
 
     DeleteMarginals();
     CloseOutputFile();
+    fPTDiagnostics = PTDiagnosticState(); // A copy must never share diagnostic output files.
 
     // exception safety
     try {
@@ -1779,10 +1780,12 @@ void BCEngineMCMC::InitializeFromProposalFunction()
     fMultivariateCovarianceUpdates = updates;
     fMCMCPhase = kPreRun;
     fMCMCCurrentIteration = 0;
+    BeginPTDiagnostics("warmup");
     BCLog::OutSummary("Loaded proposal: " + fProposalCache.input);
     BCLog::OutSummary(Form(" --> Discarding %u warm-up sweeps with fixed proposals; convergence must be reassessed.", fProposalCache.warmup));
     while (fMCMCCurrentIteration < static_cast<int>(fProposalCache.warmup))
         GetNewPointMetropolis();
+    EndPTDiagnostics();
     // Warm-up is excluded from statistics, custom histograms, trees and swap counts.
     fMCMCCurrentIteration = -1;
     fProposalCache.loaded = true;
@@ -1847,6 +1850,7 @@ void BCEngineMCMC::UpdateReplicaJourneys()
         if (fPT.journey_stage[hot] == 1) fPT.journey_stage[hot] = 2;
         const unsigned cold = fPT.replica_ids[l];
         if (fPT.journey_stage[cold] == 2) {
+            RecordPTDiagnosticRoundTrip(cold, l);
             const unsigned long long duration = sweep - fPT.journey_start[cold];
             if (!fPT.round_trips[cold] || duration < fPT.min_trip_sweeps[cold])
                 fPT.min_trip_sweeps[cold] = duration;
@@ -1874,7 +1878,9 @@ void BCEngineMCMC::ExchangeReplicas()
             ++fPT.ladder_attempts[t*ladders+l];
             const double delta = (1. / fPT.temperatures[t] - 1. / fPT.temperatures[t+1]) *
                                  (fMCMCStates[b].log_likelihood - fMCMCStates[a].log_likelihood);
-            if (delta >= 0. || std::log(fMCMCThreadLocalStorage[a].rng->Rndm()) < delta) {
+            const bool accepted = delta >= 0. || std::log(fMCMCThreadLocalStorage[a].rng->Rndm()) < delta;
+            RecordPTDiagnosticSwap(a, b, accepted);
+            if (accepted) {
                 // Exchange physical states, leaving iterations, RNGs, covariance and
                 // acceptance statistics attached to their temperature slots.
                 std::swap(fMCMCStates[a].parameters, fMCMCStates[b].parameters);
@@ -1889,47 +1895,6 @@ void BCEngineMCMC::ExchangeReplicas()
         }
     }
     UpdateReplicaJourneys();
-}
-
-void BCEngineMCMC::WriteParallelTemperingDiagnostics(const std::string& filename) const
-{
-    std::ofstream out(filename.c_str());
-    if (!out) throw std::runtime_error("Cannot write PT diagnostics: " + filename);
-    out << std::setprecision(17) << "temperature_low,temperature_high,attempts,accepted,acceptance_rate\n";
-    for (unsigned t = 0; t < fPT.attempts.size(); ++t)
-        out << fPT.temperatures[t] << ',' << fPT.temperatures[t+1] << ','
-            << fPT.attempts[t] << ',' << fPT.accepts[t] << ','
-            << (fPT.attempts[t] ? double(fPT.accepts[t]) / fPT.attempts[t] : 0.) << '\n';
-}
-
-void BCEngineMCMC::WriteParallelTemperingTransport(const std::string& prefix) const
-{
-    if (!GetParallelTempering())
-        throw std::logic_error("Replica transport diagnostics require parallel tempering");
-    std::ofstream trips((prefix + "pt_roundtrips.csv").c_str());
-    std::ofstream swaps((prefix + "pt_swaps_by_ladder.csv").c_str());
-    if (!trips || !swaps) throw std::runtime_error("Cannot write PT transport diagnostics: " + prefix);
-    trips << std::setprecision(17);
-    swaps << std::setprecision(17);
-    trips << "replica,ladder,round_trips,total_sweeps,mean_sweeps,min_sweeps,max_sweeps,journey_stage\n";
-    const unsigned ladders = GetNColdChains();
-    for (unsigned id = 0; id < fPT.round_trips.size(); ++id) {
-        trips << id << ',' << id % ladders << ',' << fPT.round_trips[id] << ',' << fPT.trip_sweeps[id] << ',';
-        if (fPT.round_trips[id]) trips << double(fPT.trip_sweeps[id]) / fPT.round_trips[id] << ','
-            << fPT.min_trip_sweeps[id] << ',' << fPT.max_trip_sweeps[id];
-        else trips << "nan,nan,nan";
-        trips << ',' << fPT.journey_stage[id] << '\n';
-    }
-    swaps << "ladder,temperature_low,temperature_high,attempts,accepted,acceptance_rate\n";
-    for (unsigned t = 0; t < fPT.attempts.size(); ++t)
-        for (unsigned l = 0; l < ladders; ++l) {
-            const unsigned k = t*ladders+l;
-            swaps << l << ',' << fPT.temperatures[t] << ',' << fPT.temperatures[t+1] << ','
-                << fPT.ladder_attempts[k] << ',' << fPT.ladder_accepts[k] << ',';
-            if (fPT.ladder_attempts[k]) swaps << double(fPT.ladder_accepts[k]) / fPT.ladder_attempts[k];
-            else swaps << "nan";
-            swaps << '\n';
-        }
 }
 
 /* Begin MPI MOD */
@@ -1992,6 +1957,9 @@ bool BCEngineMCMC::AcceptOrRejectPoint(unsigned parameter)
                     accept = true;
                 }
             }
+            RecordPTDiagnosticLocalMove(c, fMCMCProposeMultivariate &&
+                (fMCMCPhase == kMainRun || fMCMCCurrentIteration >= fMCMCNIterationsPreRunFactorized),
+                valid[j], valid[j] && std::isfinite(values[j]), accept);
             double& efficiency = fMCMCStatistics[c].efficiency[parameter];
             efficiency += ((accept ? 1. : 0.) - efficiency) /
                           (fMCMCStatistics[c].n_samples_efficiency + 1.);
@@ -2045,6 +2013,7 @@ bool BCEngineMCMC::GetNewPointMetropolis()
     ++fMCMCCurrentIteration;
     if (GetParallelTempering() && fMCMCCurrentIteration % fPT.swap_interval == 0)
         ExchangeReplicas();
+    FinishPTDiagnosticsSweep();
     return return_value; // HEPfit note: return_value is unused anywhere in BCEngineMCMC
 }
 
@@ -2191,6 +2160,7 @@ bool BCEngineMCMC::MetropolisPreRun()
     bool inefficientScalesAdjustable = true;
     fMCMCCurrentIteration = 0;
     fMCMCPhase = BCEngineMCMC::kPreRun;
+    BeginPTDiagnostics("prerun");
 
     unsigned nIterationsPreRunCheck = fMCMCNIterationsPreRunCheck;
 
@@ -2470,6 +2440,7 @@ bool BCEngineMCMC::MetropolisPreRun()
         }
     }
 
+    EndPTDiagnostics();
     if (!fProposalCache.output.empty()) SaveProposalFunction(fProposalCache.output);
 
     // reset current iteration
@@ -2655,6 +2626,8 @@ bool BCEngineMCMC::Metropolis()
     // set phase and cycle number
     fMCMCPhase = BCEngineMCMC::kMainRun;
     ResetReplicaExchangeStatistics();
+    fMCMCCurrentIteration = 0;
+    BeginPTDiagnostics("production");
 
     BCLog::OutSummary(Form(" --> Perform MCMC run with %i chains, each with %i iterations.", fMCMCNChains, fMCMCNIterationsRun));
 
@@ -2691,6 +2664,7 @@ bool BCEngineMCMC::Metropolis()
 
     } // end run
 
+    EndPTDiagnostics();
     BCLog::OutSummary(Form(" --> Markov chains ran for %i iterations.", fMCMCNIterationsRun));
 
     // reset total stats
