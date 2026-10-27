@@ -40,7 +40,7 @@ set(BAT_DICT_HEADERS
 
 
 set(BAT_PUBLIC_HEADERS)
-set(BAT_SOURCES PTDiagnostics.cxx)
+set(BAT_SOURCES PTDiagnostics.cxx Warmup.cxx)
 foreach(header IN LISTS BAT_DICT_HEADERS)
   string(REGEX REPLACE "^BAT/(.*)\\.h$" "\\1" name "${header}")
   list(APPEND BAT_PUBLIC_HEADERS "${PROJECT_SOURCE_DIR}/${header}")

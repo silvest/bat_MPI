@@ -70,3 +70,12 @@ R-hat, ESS, MCSE, and configurable region occupancy. See
 [diagnostics/README.txt](diagnostics/README.txt) for installation, examples,
 interpretation, and regression tests. Python dependencies are optional and
 are not needed by the sampler itself.
+
+The optional staged warmup policy bounds proposal adaptation and adds discarded
+fixed-proposal settling before production. Legacy stopping remains the default.
+See [diagnostic documentation](diagnostics/README.txt) for the API, status output
+and limitations; completing warmup does not establish posterior convergence.
+
+Smooth scale adaptation is independently selectable with `SetScaleAdaptation`;
+legacy scale updates remain the default. See the diagnostic documentation for
+the diminishing log-scale rule and recorded comparison settings.

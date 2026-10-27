@@ -209,8 +209,9 @@ Saved counters cover every temperature and independent ladder:
   pt_checkpoints.csv         Commit ledger for complete counter blocks
   pt_progress_PHASE.csv      Latest saved sweep and phase completion status
 
-PHASE is prerun (adaptive tuning), warmup (discarded loaded-proposal sweeps)
-or production. Sweep numbering and block counters restart in each phase.
+PHASE is prerun (adaptive tuning), warmup (discarded fixed-proposal settling sweeps)
+or production. Staged fresh warmup also uses warmup for fixed settling.
+Sweep numbering and block counters restart in each phase.
 An ordinary run has prerun and production; a loaded-proposal run has warmup
 and production. Never combine prerun/warmup with posterior draws. Trace
 files include sweep 0 and the final sweep when enabled. Occupancy counts
@@ -309,3 +310,144 @@ on/off for factorized and multivariate kernels. Proposal_pt covers the
 separate loaded warmup phase. The Python suite includes streaming reports,
 committed-window validation, partial trailing output, phase/run identities,
 transport-only analysis and plotting, alongside the statistical tests.
+
+Selectable staged warmup
+------------------------
+Legacy stopping remains the default. The staged policy separates tuning,
+discarded settling and production; it does not assess posterior convergence.
+It works with ordinary MCMC and PT, with factorized or multivariate proposals.
+
+Before initialization:
+  model.SetNIterationsPreRunMax(adaptation_sweeps);
+  model.SetPreRunPolicy(BCEngineMCMC::kPreRunStaged, settling_sweeps);
+  model.SetPreRunStatusOutput("results/run_warmup_status.csv"); // optional
+
+For staged policy, NIterationsPreRunMax is an EXACT adaptation budget. Legacy
+minimum-sweep, efficiency and R-value early-stop gates do not extend or shorten
+it. Scale/covariance update algorithms and their check interval are unchanged
+in this first patch. Adaptation is followed by the requested number of fixed-
+proposal settling sweeps, in addition to that budget. Settling uses the final
+kernel even when its sweep count is smaller than the factorized tuning length.
+Proposal scales, covariance matrices and transforms are fixed; PT exchanges
+continue. Settling draws do not enter production histograms, ROOT trees, user
+iteration callbacks or production statistics. Production starts with fresh
+efficiency, swap and journey counters. Zero settling is supported explicitly;
+a settling length sufficient for a particular target is not guaranteed.
+
+Both lengths must be nonnegative (adaptation strictly positive), and their
+sum must fit INT_MAX. Multivariate adaptation must extend beyond its factorized
+phase; a zero-joint-sweep configuration is rejected before initialization.
+Changing the policy after initialization is rejected. GetNIterationsPreRun()
+returns adaptation plus settling for staged runs. The legacy getter behavior
+is retained for legacy tuning.
+
+SetPreRunPolicy(kPreRunLegacy) selects the old stopping rule. Existing clients
+that make no policy call keep legacy behavior. Rebuild all clients after this
+BAT upgrade: the engine layout/API changed. CMake exports BAT_HAS_STAGED_WARMUP
+and bat-config --features reports staged-warmup.
+
+GetPreRunStatus() and the optional atomic CSV distinguish:
+- stage: not_started, adapting, settling, complete;
+- stop_reason: pending, adaptation_budget_exhausted, legacy_criteria_met,
+  legacy_maximum_reached, loaded_proposal;
+- actual adaptation/settling sweeps and completion flags;
+- acceptance estimates outside the target and zero-acceptance kernels in the
+  final adaptation window and during settling (settling estimates accumulate
+  over that whole phase);
+- legacy_rvalue_checked/passed: legacy, non-rank-normalized diagnostic from
+  adaptive samples, never a production precision claim;
+- posterior_convergence_assessed: false, because BAT did not run that assessment.
+
+Counts are parameter/slot pairs for factorized proposals, or joint-kernel/slot
+pairs for multivariate proposals. These are local proposal diagnostics. A
+zero count at a fixed parameter is not a problem: fixed parameters are omitted.
+Acceptance outliers and zero-movement kernels are reported without causing
+endless adaptation. Budget exhaustion permits collection of candidate
+production samples with warnings; it does not certify that those samples
+are ready for inference. Examine proposal and transport problems, then check
+cold production R-hat, ESS and region-weight MCSE in the Python analyzer.
+An output filename requires an existing parent directory. Output filenames
+are not copied with an engine; policy/settings/status are copied. CSV progress
+is refreshed at adaptation checks and periodically during settling. Files are
+diagnostic snapshots, not complete restart checkpoints.
+
+PT streaming keeps all three phases: prerun (adaptation), warmup (fixed settling)
+and production. The analyzer prefers the latest available phase in that order,
+so an active settling phase takes precedence over completed adaptation. Its
+summary also includes warmup_status when that optional CSV is present. Older
+runs without that file remain supported. Model-specific cuts stay in model code.
+
+LoadProposalFunction(file, warmup) already bypasses adaptation. Its own warmup
+argument remains authoritative, and no second staged settling is added. Status
+records loaded_proposal, zero adaptation sweeps and the actual discarded warmup.
+The cache format is unchanged, and no previous convergence decision is restored.
+The automatic proposal output is saved after settling, so positions match the
+end of discarded warmup while the kernel matches the frozen adapted proposal.
+
+Regression tests Warmup_factorized, Warmup_multivariate and Warmup_pt exercise
+real MPI evaluations, exact budgets despite unmet R/efficiency/minimum gates,
+frozen kernels through settling and production, short/zero settling, cold-only
+ROOT/histograms with lag, proposal-cache round trips, reported stuck proposals,
+configuration validation and legacy early stopping. The Python suite verifies
+that settling phase selection and status metadata are preserved.
+
+Optional smooth scale adaptation (independent second patch)
+-----------------------------------------------------------
+Scale adaptation and prerun stopping are separate controls. The default scale
+method remains legacy, including when the staged policy is selected. To opt in:
+  model.SetScaleAdaptation(BCEngineMCMC::kScaleSmooth);
+The C++ setter also accepts target, gain and decay (defaults 0.25, 2.0, 0.6).
+All must be finite; target is in (0,1), gain positive, decay in (0.5,1]. Configure
+before initialization. kScaleLegacy explicitly selects the old scale updates.
+
+For each measured acceptance window, smooth tuning uses:
+  eta_k = gain / k^decay
+  delta = clamp(eta_k * (acceptance - target), -0.5, 0.5)
+  log(proposal standard deviation) += delta
+The schedule starts at k=1 and has independent counters for factorized and
+joint-proposal windows. Coordinate scales already represent standard deviation.
+BAT's joint multiplier multiplies covariance, so its log increment is 2*delta.
+Updates honor native scale bounds and retain positive finite scales, with a
+machine-normal positive floor when the configured lower limit is zero. Fixed
+coordinate parameters are skipped. A fixed first coordinate still needs a
+positive active joint variance multiplier; smooth joint warmup initializes that
+case with 2.38^2 / number_of_free_parameters.
+
+Smooth tuning makes small updates even when acceptance is inside the legacy
+15-35% reporting band. That band remains a diagnostic; the tuning target is a
+separate configurable objective. The default 0.25 is an experimental starting
+point consistent with the midpoint of the existing band, not a universal
+optimal acceptance rate. The covariance-shape update is unchanged. The finite
+adaptation budget and fixed settling phase remain controlled by the prerun policy.
+No scale or covariance adaptation occurs during settling or production.
+
+Use the SAME NIterationsPreRunCheck (--nUpdateMax in mainGM) for a controlled
+comparison with patch one. This flag does not silently increase the acceptance
+window. In multivariate runs, smooth windows stop exactly at the end of the
+factorized phase so that coordinate and joint acceptance statistics are not
+mixed. The joint learning-rate counter then starts afresh. Changing the check
+interval changes the number of learning-rate updates and is another experiment.
+
+warmup_status.csv records scale_adaptation=legacy|smooth, scale_target,
+scale_gain, scale_decay, scale_max_log_step, factorized_scale_updates and
+joint_scale_updates. The analyzer includes these as typed metadata in summary.json.
+Counters count update WINDOWS, not individual parameter/replica updates.
+CMake exports BAT_HAS_SMOOTH_SCALE_ADAPTATION; bat-config --features reports
+smooth-adaptation. Rebuild BAT and clients against matching headers/libraries.
+The tuned-proposal cache format is unchanged: loading restores an already fixed
+kernel and does not run either tuning method. Selected scale-method metadata on
+such a library-loaded run describes configuration, not the cache's training
+history; its update counters are zero. mainGM rejects --smooth-adaptation with
+--load-proposal to avoid a misleading comparison of tuning methods.
+
+Smooth_scale checks update direction, bounded steps, diminishing gain,
+standard-deviation versus variance units, fixed coordinates, invalid settings,
+no tuning after freezing, and known Gaussian moments under coordinate/joint
+sampling with and without PT. Warmup_smooth_* additionally exercises real MPI
+worker batches, exact lifecycle budgets, discarded settling, unchanged cached
+kernels and cold-only production. Existing Warmup_* tests retain the legacy
+scale method, giving direct coverage of the two separate options.
+
+Method references:
+https://github-pages.ucl.ac.uk/rmcmc/reference/stochastic_approximation_scale_adapter.html
+https://doi.org/10.1080/03610926.2014.936562

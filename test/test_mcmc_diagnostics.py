@@ -331,6 +331,35 @@ class StreamingPTDiagnostics(unittest.TestCase):
         self.run_report()
         self.assertFalse((self.output/'pt_regions_run0.png').exists())
 
+    def test_staged_settling_is_preferred_over_completed_adaptation(self):
+        path=Path(str(self.prefix)+'pt_checkpoints.csv')
+        path.write_text(''.join(line for line in path.read_text().splitlines(True) if not line.startswith('production,')))
+        Path(str(self.prefix)+'pt_progress_production.csv').unlink()
+        self.table('pt_progress_warmup.csv',['phase','last_sweep','completed','checkpoint_sweeps','trace_sweeps'],[['warmup',3,0,2,0]])
+        self.table('warmup_status.csv',['policy','stage','stop_reason','posterior_convergence_assessed'],
+                   [['staged','settling','adaptation_budget_exhausted',0]])
+        report=self.run_report()
+        self.assertEqual(report['runs'][0]['preferred_phase'],'warmup')
+        self.assertEqual(report['runs'][0]['warmup_status']['stage'],'settling')
+        self.assertIs(report['runs'][0]['warmup_status']['posterior_convergence_assessed'],False)
+        self.assertTrue(any('warmup interrupted or still running' in x for x in report['issues']))
+        self.assertFalse(any('prerun interrupted' in x for x in report['issues']))
+
+    def test_smooth_adaptation_metadata_has_numeric_types(self):
+        self.table('warmup_status.csv',['policy','stage','scale_adaptation','scale_target','scale_gain','scale_decay',
+                   'scale_max_log_step','factorized_scale_updates','joint_scale_updates'],
+                   [['staged','complete','smooth',.25,2.,.6,.5,12,3]])
+        status=self.run_report()['runs'][0]['warmup_status']
+        self.assertEqual(status['scale_adaptation'],'smooth')
+        self.assertEqual(status['scale_target'],.25)
+        self.assertIsInstance(status['scale_gain'],float)
+        self.assertEqual(status['factorized_scale_updates'],12)
+        self.assertEqual(status['joint_scale_updates'],3)
+
+    def test_nonfinite_smooth_metadata_is_rejected(self):
+        self.table('warmup_status.csv',['policy','stage','scale_target'],[['staged','complete','nan']])
+        with self.assertRaisesRegex(ValueError,'Nonfinite'):self.run_report()
+
     def test_hot_trapping_warning_requires_disagreement(self):
         path=Path(str(self.prefix)+'pt_region_transitions.csv')
         lines=path.read_text().splitlines(True)

@@ -326,6 +326,47 @@ public:
                                              std::vector<unsigned>& labels) const
     { labels.clear(); }
 
+    /** Prerun stopping policy. Legacy remains the default. */
+    enum PreRunPolicy { kPreRunLegacy, kPreRunStaged };
+    /** Scale tuning is independent of the prerun stopping policy. */
+    enum ScaleAdaptation { kScaleLegacy, kScaleSmooth };
+    /** Warmup progress is distinct from an assessment of posterior convergence.
+     * Efficiency counts describe the final measured window, not a convergence test. */
+    struct PreRunStatus {
+        PreRunPolicy policy = kPreRunLegacy;
+        ScaleAdaptation scale_adaptation = kScaleLegacy;
+        double scale_target = 0.25, scale_gain = 2., scale_decay = 0.6;
+        unsigned long long factorized_scale_updates = 0, joint_scale_updates = 0;
+        std::string stage = "not_started", stop_reason = "not_started";
+        unsigned adaptation_sweeps = 0, settling_sweeps = 0;
+        unsigned adaptation_efficiency_outliers = 0, adaptation_zero_acceptance = 0;
+        unsigned settling_efficiency_outliers = 0, settling_zero_acceptance = 0;
+        bool adaptation_complete = false, settling_complete = false, proposal_loaded = false;
+        bool legacy_rvalue_checked = false, legacy_rvalue_passed = false;
+        bool posterior_convergence_assessed = false;
+    };
+    /** Select before initialization. Staged tuning lasts exactly
+     * GetNIterationsPreRunMax() sweeps, ignoring the legacy minimum and early-stop
+     * gates, followed by settling_sweeps discarded sweeps with fixed proposals.
+     * The multivariate budget must include at least one joint-proposal sweep.
+     * LoadProposalFunction bypasses tuning and uses its own warmup argument. */
+    void SetPreRunPolicy(PreRunPolicy policy, unsigned settling_sweeps = 1000);
+    /** Select before initialization. Smooth updates act on log proposal standard
+     * deviation with diminishing gain and a +/-0.5 maximum log step per window.
+     * Joint BAT scale factors multiply covariance, so their log update is doubled.
+     * Target/gain/decay must be finite, target in (0,1), gain > 0, decay in (0.5,1].
+     * This changes neither the stopping policy nor the covariance-shape update. */
+    void SetScaleAdaptation(ScaleAdaptation method, double target = 0.25,
+                            double gain = 2., double decay = 0.6);
+    ScaleAdaptation GetScaleAdaptation() const { return fWarmup.scale_adaptation; }
+    PreRunPolicy GetPreRunPolicy() const { return fWarmup.policy; }
+    unsigned GetNIterationsSettling() const { return fWarmup.settling_sweeps; }
+    const PreRunStatus& GetPreRunStatus() const { return fWarmup.status; }
+    /** Optional atomic progress CSV. Parent directory must exist. Not copied with
+     * an engine. Empty filename disables automatic snapshots. */
+    void SetPreRunStatusOutput(const std::string& filename);
+    void WritePreRunStatus(const std::string& filename) const;
+
     /** Schedule saving the tuned proposal at the end of pre-run (empty disables). */
     void SetProposalFunctionOutput(const std::string& filename)
     { fProposalCache.output = filename; }
@@ -361,8 +402,9 @@ public:
 
     /**
      * @return the number of iterations the prerun actually took. If
-     * the prerun wasn't run, that's 0. Else it is bounded by
-     * GetNIterationsPreRunMin() and GetNIterationsPreRunMax().
+     * the prerun wasn't run, that's 0. For staged warmup this includes the
+     * adaptation budget and discarded settling; for a loaded proposal only
+     * discarded warmup is counted. Legacy behavior is unchanged.
      */
     unsigned GetNIterationsPreRun() const;
 
@@ -1968,6 +2010,26 @@ protected:
     void ClassifyPTDiagnosticState(const std::vector<double>& parameters, std::vector<unsigned>& labels) const;
     void FlushPTDiagnostics(bool complete);
     void WritePTDiagnosticTrace();
+
+    struct WarmupControl {
+        PreRunPolicy policy = kPreRunLegacy;
+        unsigned settling_sweeps = 1000;
+        ScaleAdaptation scale_adaptation = kScaleLegacy;
+        double scale_target = 0.25, scale_gain = 2., scale_decay = 0.6;
+        bool fixed_kernel = false;
+        std::string output;
+        PreRunStatus status;
+    } fWarmup;
+    bool UseMultivariateProposal() const {
+        return fMCMCProposeMultivariate && (fMCMCPhase == kMainRun ||
+            fWarmup.fixed_kernel || fMCMCCurrentIteration >= int(fMCMCNIterationsPreRunFactorized));
+    }
+    void ResetPreRunStatus();
+    struct ScaleUpdateResult { bool all_efficient = true, adjustable = false, changed = false; };
+    ScaleUpdateResult UpdateSmoothProposalScales(bool joint);
+    void RecordPreRunEfficiencies(bool settling, bool joint);
+    void RunFixedProposalWarmup(unsigned sweeps);
+    void UpdatePreRunStatusOutput() const;
 
     struct ProposalCacheSettings {
         std::string input, output;

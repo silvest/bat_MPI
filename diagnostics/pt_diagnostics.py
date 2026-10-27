@@ -92,7 +92,7 @@ def analyze_streams(prefixes, output, no_plots=False, trace_points=2000):
             if not Path(str(prefix) + 'pt_checkpoints.csv').exists():
                 continue  # Backward compatibility: old cold-only diagnostics still work.
             phases = checkpoints(prefix)
-            preferred = 'production' if 'production' in phases else ('prerun' if 'prerun' in phases else 'warmup')
+            preferred = 'production' if 'production' in phases else ('warmup' if 'warmup' in phases else 'prerun')
             defs = list(rows(str(prefix) + 'pt_partitions.csv'))
             schema = defaultdict(dict)
             for row in defs:
@@ -101,6 +101,28 @@ def analyze_streams(prefixes, output, no_plots=False, trace_points=2000):
             run_info = dict(run=run, prefix=str(prefix), phases=phases, preferred_phase=preferred,
                             partitions=list(schema), ignored_uncommitted_rows=0, observations=[])
             reports.append(run_info)
+            status_path = Path(str(prefix) + 'warmup_status.csv')
+            if status_path.exists():
+                status_rows = list(rows(status_path))
+                if len(status_rows) != 1 or any(value is None for value in status_rows[0].values()):
+                    raise ValueError(f'Invalid warmup status: {status_path}')
+                status = dict(status_rows[0])
+                for key in ('adaptation_sweeps', 'settling_sweeps', 'adaptation_efficiency_outliers',
+                            'adaptation_zero_acceptance', 'settling_efficiency_outliers', 'settling_zero_acceptance',
+                            'factorized_scale_updates', 'joint_scale_updates'):
+                    if key in status:
+                        status[key] = number(status, key, True)
+                        if status[key] < 0: raise ValueError(f'Negative warmup status counter: {key}')
+                for key in ('scale_target', 'scale_gain', 'scale_decay', 'scale_max_log_step'):
+                    if key in status:
+                        status[key] = number(status, key)
+                        if not math.isfinite(status[key]): raise ValueError(f'Nonfinite warmup scale setting: {key}')
+                for key in ('adaptation_complete', 'settling_complete', 'proposal_loaded',
+                            'legacy_rvalue_checked', 'legacy_rvalue_passed', 'posterior_convergence_assessed'):
+                    if key in status:
+                        if status[key] not in ('0', '1'): raise ValueError(f'Invalid warmup status flag: {key}')
+                        status[key] = status[key] == '1'
+                run_info['warmup_status'] = status
             if not phases.get(preferred, {}).get('completed', False):
                 issues.append(f"run {run}: {preferred} interrupted or still running; using committed sweeps through {phases.get(preferred, {}).get('last_sweep', 0)}")
             # Copy full committed block tables in a streaming pass. Only compact

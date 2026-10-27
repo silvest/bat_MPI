@@ -155,3 +155,29 @@ if(BAT_BUILD_PT_TESTS)
     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:PTDiagnostics_MPI_TEST> ${MPIEXEC_POSTFLAGS})
   set_tests_properties(PT_streaming PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
 endif()
+
+if(BAT_BUILD_PT_TESTS)
+  add_executable(StagedWarmup_MPI_TEST test/StagedWarmup_MPI_TEST.cxx)
+  target_link_libraries(StagedWarmup_MPI_TEST PRIVATE BAT::BAT MPI::MPI_CXX)
+  foreach(case IN ITEMS factorized multivariate pt)
+    add_test(NAME Warmup_${case} COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 3
+      ${MPIEXEC_PREFLAGS} $<TARGET_FILE:StagedWarmup_MPI_TEST> ${MPIEXEC_POSTFLAGS} ${case})
+    set_tests_properties(Warmup_${case} PROPERTIES TIMEOUT 90 RUN_SERIAL TRUE)
+  endforeach()
+endif()
+
+if(BAT_BUILD_PT_TESTS)
+  foreach(case IN ITEMS factorized multivariate pt)
+    add_test(NAME Warmup_smooth_${case} COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 3
+      ${MPIEXEC_PREFLAGS} $<TARGET_FILE:StagedWarmup_MPI_TEST> ${MPIEXEC_POSTFLAGS} ${case} smooth)
+    set_tests_properties(Warmup_smooth_${case} PROPERTIES TIMEOUT 90 RUN_SERIAL TRUE)
+  endforeach()
+endif()
+
+if(BAT_BUILD_PT_TESTS)
+  add_executable(SmoothScale_MPI_TEST test/SmoothScale_MPI_TEST.cxx)
+  target_link_libraries(SmoothScale_MPI_TEST PRIVATE BAT::BAT MPI::MPI_CXX)
+  add_test(NAME Smooth_scale COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 1
+    ${MPIEXEC_PREFLAGS} $<TARGET_FILE:SmoothScale_MPI_TEST> ${MPIEXEC_POSTFLAGS})
+  set_tests_properties(Smooth_scale PROPERTIES TIMEOUT 90 RUN_SERIAL TRUE)
+endif()

@@ -204,6 +204,8 @@ BCEngineMCMC::BCEngineMCMC(const BCEngineMCMC& other)
 {
     fPT = other.fPT;
     fProposalCache = other.fProposalCache;
+    fWarmup = other.fWarmup;
+    fWarmup.output.clear();
     // set again in case user overloads the setter to create custom structures
     SetNChains(other.fMCMCNChains);
 
@@ -229,6 +231,8 @@ BCEngineMCMC& BCEngineMCMC::operator=(const BCEngineMCMC& other)
         fChainIndex = other.fChainIndex;
         fPT = other.fPT;
         fProposalCache = other.fProposalCache;
+        fWarmup = other.fWarmup;
+        fWarmup.output.clear();
         fName = other.fName;
         fSafeName = other.fSafeName;
         fParameters = other.fParameters;
@@ -657,6 +661,8 @@ unsigned BCEngineMCMC::GetNIterationsPreRun() const
 {
     if (fMCMCPhase == kUnsetPhase)
         return 0;
+    if (fWarmup.policy == kPreRunStaged || fWarmup.status.proposal_loaded)
+        return fWarmup.status.adaptation_sweeps + fWarmup.status.settling_sweeps;
     BCLOG_WARNING(Form("global %d min %d max %d", fMCMCNIterationsConvergenceGlobal, int(fMCMCNIterationsPreRunMin), int(fMCMCNIterationsPreRunMax)));
     if (fMCMCNIterationsConvergenceGlobal > -1)
         return fMCMCNIterationsConvergenceGlobal;
@@ -1778,15 +1784,11 @@ void BCEngineMCMC::InitializeFromProposalFunction()
     fMultivariateProposalFunctionCovariance = covariance;
     fMultivariateProposalFunctionCholeskyDecomposition = cholesky;
     fMultivariateCovarianceUpdates = updates;
-    fMCMCPhase = kPreRun;
-    fMCMCCurrentIteration = 0;
-    BeginPTDiagnostics("warmup");
+    fWarmup.status.proposal_loaded = true;
+    fWarmup.status.adaptation_complete = true;
+    fWarmup.status.stop_reason = "loaded_proposal";
     BCLog::OutSummary("Loaded proposal: " + fProposalCache.input);
-    BCLog::OutSummary(Form(" --> Discarding %u warm-up sweeps with fixed proposals; convergence must be reassessed.", fProposalCache.warmup));
-    while (fMCMCCurrentIteration < static_cast<int>(fProposalCache.warmup))
-        GetNewPointMetropolis();
-    EndPTDiagnostics();
-    // Warm-up is excluded from statistics, custom histograms, trees and swap counts.
+    RunFixedProposalWarmup(fProposalCache.warmup);
     fMCMCCurrentIteration = -1;
     fProposalCache.loaded = true;
 }
@@ -1917,7 +1919,7 @@ bool BCEngineMCMC::AcceptOrRejectPoint(unsigned parameter)
             UpdateChainIndex(c);
             ++fMCMCStates[c].iteration;
             std::vector<double>& x = fMCMCThreadLocalStorage[c].parameters;
-            valid[j] = (fMCMCProposeMultivariate && (fMCMCPhase == kMainRun || fMCMCCurrentIteration >= fMCMCNIterationsPreRunFactorized))
+            valid[j] = UseMultivariateProposal()
                 ? GetProposalPointMetropolis(c, x) : GetProposalPointMetropolis(c, parameter, x);
             if (valid[j]) {
                 any_valid = true;
@@ -1957,8 +1959,7 @@ bool BCEngineMCMC::AcceptOrRejectPoint(unsigned parameter)
                     accept = true;
                 }
             }
-            RecordPTDiagnosticLocalMove(c, fMCMCProposeMultivariate &&
-                (fMCMCPhase == kMainRun || fMCMCCurrentIteration >= fMCMCNIterationsPreRunFactorized),
+            RecordPTDiagnosticLocalMove(c, UseMultivariateProposal(),
                 valid[j], valid[j] && std::isfinite(values[j]), accept);
             double& efficiency = fMCMCStatistics[c].efficiency[parameter];
             efficiency += ((accept ? 1. : 0.) - efficiency) /
@@ -1988,7 +1989,7 @@ bool BCEngineMCMC::GetNewPointMetropolis()
 {
     bool return_value = true;
 
-    if (!fMCMCProposeMultivariate || (fMCMCPhase != kMainRun && fMCMCCurrentIteration < fMCMCNIterationsPreRunFactorized)) {
+    if (!UseMultivariateProposal()) {
         /* run over parameters one at a time */
 
         for (unsigned ipar = 0; ipar < GetNParameters(); ++ipar) {
@@ -2097,6 +2098,21 @@ void BCEngineMCMC::CloseOutputFile()
 // --------------------------------------------------------
 bool BCEngineMCMC::MetropolisPreRun()
 {
+    const bool staged = fWarmup.policy == kPreRunStaged;
+    const bool smooth = fWarmup.scale_adaptation == kScaleSmooth;
+    if (smooth && fProposalCache.input.empty() &&
+        (!std::isfinite(fMCMCScaleFactorLowerLimit) || fMCMCScaleFactorLowerLimit < 0. ||
+         !std::isfinite(fMCMCScaleFactorUpperLimit) || fMCMCScaleFactorUpperLimit <= 0. ||
+         fMCMCScaleFactorLowerLimit > fMCMCScaleFactorUpperLimit))
+        throw std::invalid_argument("Smooth adaptation requires finite ordered nonnegative scale limits and a positive upper limit");
+    if ((staged || smooth) && fProposalCache.input.empty()) {
+        const unsigned limit = static_cast<unsigned>(std::numeric_limits<int>::max());
+        if (!GetNFreeParameters() || !fMCMCNIterationsPreRunMax || fMCMCNIterationsPreRunMax > limit || !fMCMCNIterationsPreRunCheck ||
+            (staged && (fWarmup.settling_sweeps > limit || fWarmup.settling_sweeps > limit - fMCMCNIterationsPreRunMax)))
+            throw std::invalid_argument("Warmup requires positive adaptation/check budgets and total sweeps <= INT_MAX");
+        if (fMCMCProposeMultivariate && fMCMCNIterationsPreRunFactorized >= fMCMCNIterationsPreRunMax)
+            throw std::invalid_argument("Multivariate warmup needs adaptation sweeps after the factorized phase");
+    }
     if (!fProposalCache.input.empty()) {
         InitializeFromProposalFunction();
         if (!fProposalCache.output.empty()) SaveProposalFunction(fProposalCache.output);
@@ -2109,6 +2125,10 @@ bool BCEngineMCMC::MetropolisPreRun()
     // initialize Markov chain
     MCMCInitialize();
 
+    // A fixed first coordinate has zero coordinate scale. It still needs a
+    // positive active covariance multiplier when using the joint kernel.
+    if (smooth && fMCMCProposeMultivariate && GetParameter(0).Fixed())
+        for (auto& scales : fMCMCProposalFunctionScaleFactor) scales[0] = 2.38 * 2.38 / GetNFreeParameters();
     bool first_iteration_multivariate = true;
     if (!fMCMCOutputFile && fMCMCFlagWritePreRunToFile) // HEPfit Note: Modification required to access Root tree from HEPfit consistently.
         InitializeMarkovChainTree();
@@ -2160,6 +2180,14 @@ bool BCEngineMCMC::MetropolisPreRun()
     bool inefficientScalesAdjustable = true;
     fMCMCCurrentIteration = 0;
     fMCMCPhase = BCEngineMCMC::kPreRun;
+    fWarmup.status.stage = "adapting";
+    fWarmup.status.stop_reason = "pending";
+    UpdatePreRunStatusOutput();
+    if (staged)
+        BCLog::OutSummary(Form(" --> Staged policy: exactly %u adaptation sweeps, then %u discarded fixed-proposal sweeps; posterior convergence is assessed separately.", fMCMCNIterationsPreRunMax, fWarmup.settling_sweeps));
+    if (smooth)
+        BCLog::OutSummary(Form(" --> Smooth scale adaptation: target=%g, gain=%g, decay=%g, maximum log-SD step=0.5; stopping policy is %s.",
+            fWarmup.scale_target, fWarmup.scale_gain, fWarmup.scale_decay, staged ? "staged" : "legacy"));
     BeginPTDiagnostics("prerun");
 
     unsigned nIterationsPreRunCheck = fMCMCNIterationsPreRunCheck;
@@ -2184,12 +2212,20 @@ bool BCEngineMCMC::MetropolisPreRun()
     //       OR the minimum number of tuning steps have been made to the multivariate proposal function, if using it.
     //     )
     while (fMCMCCurrentIteration < (int)fMCMCNIterationsPreRunMax
-            && (fMCMCCurrentIteration < (int)fMCMCNIterationsPreRunMin
+            && (staged || fMCMCCurrentIteration < (int)fMCMCNIterationsPreRunMin
                 || (!allEfficient && inefficientScalesAdjustable)
                 || (GetNColdChains() > 1 && fMCMCNIterationsConvergenceGlobal < 0))) {
 
+        // Smooth tuning measures one kernel per window and restarts the gain
+        // schedule when switching from coordinate to joint proposals.
+        const bool window_joint = UseMultivariateProposal();
+        unsigned smooth_window = nIterationsPreRunCheck;
+        if (smooth && fMCMCProposeMultivariate && !window_joint) {
+            smooth_window = std::min(std::max(1u, nIterationsPreRunCheck / GetNFreeParameters()),
+                fMCMCNIterationsPreRunFactorized - unsigned(fMCMCCurrentIteration));
+        }
         // Generate (nIterationsCheckConvergence) new points in each chain
-        for (unsigned i = 0; i < ((fMCMCProposeMultivariate && fMCMCCurrentIteration < fMCMCNIterationsPreRunFactorized) ? std::max(1u, nIterationsPreRunCheck / GetParameters().GetNFreeParameters()) : nIterationsPreRunCheck ) && fMCMCCurrentIteration < (int)fMCMCNIterationsPreRunMax; ++i) {
+        for (unsigned i = 0; i < (smooth ? smooth_window : ((fMCMCProposeMultivariate && fMCMCCurrentIteration < fMCMCNIterationsPreRunFactorized) ? std::max(1u, nIterationsPreRunCheck / GetParameters().GetNFreeParameters()) : nIterationsPreRunCheck )) && fMCMCCurrentIteration < (int)fMCMCNIterationsPreRunMax; ++i) {
             // get new point & calculate observables
             GetNewPointMetropolis();
             EvaluateObservables();
@@ -2210,7 +2246,12 @@ bool BCEngineMCMC::MetropolisPreRun()
 
         bool scalesAdjusted = false;
 
-        for (unsigned c = 0; c < fMCMCNChains; ++c) {
+        if (smooth) {
+            const auto update = UpdateSmoothProposalScales(window_joint);
+            allEfficient = update.all_efficient;
+            inefficientScalesAdjustable = update.adjustable;
+            scalesAdjusted = update.changed;
+        } else for (unsigned c = 0; c < fMCMCNChains; ++c) {
 
             if (fMCMCProposeMultivariate && fMCMCCurrentIteration >= fMCMCNIterationsPreRunFactorized) { // multivariate proposal function, one efficiency per chain
 
@@ -2362,6 +2403,11 @@ bool BCEngineMCMC::MetropolisPreRun()
                 }
             } // end convergence conditional
         } // end chains>1 conditional
+        fWarmup.status.adaptation_sweeps = fMCMCCurrentIteration;
+        fWarmup.status.legacy_rvalue_checked = GetNColdChains() > 1;
+        fWarmup.status.legacy_rvalue_passed = GetNColdChains() > 1 && fMCMCNIterationsConvergenceGlobal > 0;
+        RecordPreRunEfficiencies(false, smooth ? window_joint : UseMultivariateProposal());
+        UpdatePreRunStatusOutput();
         if (fMCMCTree && nChecks % 10 == 0) {
             fMCMCTree->AutoSave("SaveSelf");
         }
@@ -2369,7 +2415,7 @@ bool BCEngineMCMC::MetropolisPreRun()
         ++nChecks;              // increase number of checks made
 
         // scales have not been adjusted and convergence has been reached (or only one chain used)
-        if (!scalesAdjusted && (GetNColdChains() == 1 || fMCMCNIterationsConvergenceGlobal > 0)) {
+        if (!staged && !scalesAdjusted && (GetNColdChains() == 1 || fMCMCNIterationsConvergenceGlobal > 0)) {
             if (fMCMCCurrentIteration < (int)fMCMCNIterationsPreRunMin)
                 // still below minimum number of prerun iterations
                 BCLog::OutDetail(Form("     * Running until at least %d iterations performed in prerun. Current iteration is %d", fMCMCNIterationsPreRunMin, fMCMCCurrentIteration));
@@ -2398,8 +2444,10 @@ bool BCEngineMCMC::MetropolisPreRun()
     // restore ROOT error ignore level
     gErrorIgnoreLevel = old_error_ignore_level;
 
-    // output results of prerun concerning convergence and scale adjustment
-    if (fMCMCNIterationsConvergenceGlobal > 0) {
+    // Staged warmup completion is not a posterior convergence claim.
+    if (staged) {
+        BCLog::OutSummary(" --> Adaptation budget exhausted; freezing proposal scales and covariances. Posterior convergence has not been assessed.");
+    } else if (fMCMCNIterationsConvergenceGlobal > 0) {
         if (allEfficient)
             BCLog::OutSummary(Form(" --> Set of %i Markov chains converged within %i iterations, and all scales are adjusted.", GetNColdChains(), fMCMCNIterationsConvergenceGlobal));
         else if (!inefficientScalesAdjustable)
@@ -2441,6 +2489,20 @@ bool BCEngineMCMC::MetropolisPreRun()
     }
 
     EndPTDiagnostics();
+    fWarmup.status.adaptation_complete = true;
+    fWarmup.status.stop_reason = staged ? "adaptation_budget_exhausted" :
+        (fMCMCCurrentIteration >= int(fMCMCNIterationsPreRunMax) ? "legacy_maximum_reached" : "legacy_criteria_met");
+    if (staged) {
+        RunFixedProposalWarmup(fWarmup.settling_sweeps);
+        fMCMCCurrentIteration = -1; // Settling restarts sweep numbering; the proposal is already trained.
+        // Keep the traditional summary from claiming posterior convergence based
+        // on adaptive, non-rank-normalized statistics.
+        fMCMCNIterationsConvergenceGlobal = -1;
+    } else {
+        fWarmup.status.stage = "complete";
+        fWarmup.status.settling_complete = true; // No additional settling requested by legacy policy.
+        UpdatePreRunStatusOutput();
+    }
     if (!fProposalCache.output.empty()) SaveProposalFunction(fProposalCache.output);
 
     // reset current iteration
@@ -2725,6 +2787,7 @@ void BCEngineMCMC::EvaluateObservables(unsigned chain)
 // --------------------------------------------------------
 void BCEngineMCMC::ResetResults()
 {
+    ResetPreRunStatus();
     // reset variables
     fMCMCCurrentIteration = -1;
     fMCMCStatistics.clear();
@@ -2758,6 +2821,7 @@ void BCEngineMCMC::MCMCInitialize()
         fMCMCNChains % fPT.temperatures.size() != 0))
         throw std::invalid_argument("MCMC: chain count must be a positive multiple of the temperature count");
     ResetReplicaExchangeStatistics();
+    ResetPreRunStatus();
     // reset phase
     fMCMCPhase = BCEngineMCMC::kUnsetPhase;
 

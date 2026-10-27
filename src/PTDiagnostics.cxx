@@ -79,7 +79,9 @@ void BCEngineMCMC::BeginPTDiagnostics(const std::string& phase)
     if (d.active) EndPTDiagnostics();
     // A second sampling run on this engine replaces its previous output. Keep
     // prerun/warmup only when transitioning into their first production phase.
-    if (d.initialized && (phase != "production" || d.phase == "production")) {
+    const bool continuation = (phase == "warmup" && d.phase == "prerun") ||
+        (phase == "production" && d.phase != "production");
+    if (d.initialized && !continuation) {
         const std::string prefix = d.prefix;
         const unsigned checkpoint = d.checkpoint_sweeps, trace = d.trace_sweeps;
         d = PTDiagnosticState();
