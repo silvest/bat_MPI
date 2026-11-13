@@ -360,6 +360,38 @@ class StreamingPTDiagnostics(unittest.TestCase):
         self.table('warmup_status.csv',['policy','stage','scale_target'],[['staged','complete','nan']])
         with self.assertRaisesRegex(ValueError,'Nonfinite'):self.run_report()
 
+    def test_temperature_changes_split_committed_windows_and_occupancy_exposure(self):
+        # Prerun updates at sweep 1, between regular checkpoints. Hot-slot
+        # exposure is split over two temperatures, while total exposure is 3.
+        for suffix in ['pt_checkpoints.csv', *self.pt.FILES]:
+            path = Path(str(self.prefix)+suffix)
+            with path.open() as handle:
+                reader = csv.DictReader(handle)
+                columns = reader.fieldnames
+                data = list(reader)
+            for row in data:
+                if row['phase'] != 'prerun': continue
+                first, last = (1, 1) if row['block'] == '0' else (2, 3)
+                row['first_sweep'], row['last_sweep'] = str(first), str(last)
+                if suffix == 'pt_region_occupancy.csv':
+                    row['draws'] = str(last-first+1)
+                    if int(row['samples']): row['samples'] = row['draws']
+                if row['block'] == '1':
+                    for key in ('temperature', 'temperature_high'):
+                        if row.get(key) == '4': row[key] = '3'
+            with path.open('w', newline='') as handle:
+                writer = csv.DictWriter(handle, fieldnames=columns)
+                writer.writeheader(); writer.writerows(data)
+        self.table('warmup_status.csv', ['temperature_adaptation','temperature_updates',
+                   'last_temperature_update','temperatures_frozen'], [[1,1,1,1]])
+        report = self.run_report()
+        metadata = report['runs'][0]['temperature_adaptation']
+        self.assertEqual(metadata['updates'], 1)
+        self.assertIs(metadata['frozen'], True)
+        path = Path(str(self.prefix)+'pt_local_moves.csv')
+        path.write_text(path.read_text().replace('prerun,1,2,3,', 'prerun,1,1,3,'))
+        with self.assertRaisesRegex(ValueError, 'committed window'): self.run_report()
+
     def test_hot_trapping_warning_requires_disagreement(self):
         path=Path(str(self.prefix)+'pt_region_transitions.csv')
         lines=path.read_text().splitlines(True)

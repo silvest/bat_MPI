@@ -20,6 +20,7 @@ class Mixture : public BCModel {
 public:
     std::vector<double> sum, positive;
     unsigned samples = 0, callbacks = 0, main_start_callbacks = 0;
+    unsigned long long evaluations = 0;
     bool bimodal;
     Mixture(bool multimodal = true) : BCModel("pt_test"), bimodal(multimodal) {
         AddParameter("x", -10., 10.);
@@ -31,6 +32,10 @@ public:
         double b = std::log(0.7 / 0.8) - 0.5 * std::pow((p[0]-3.)/0.8, 2);
         double m = std::max(a,b);
         return m + std::log(std::exp(a-m) + std::exp(b-m));
+    }
+    double LogEval(const std::vector<double>& p) override {
+        ++evaluations;
+        return BCModel::LogEval(p);
     }
     std::vector<PTDiagnosticPartition> DefinePTDiagnosticPartitions() const override {
         return {{"sign", {"negative", "positive"}}};
@@ -151,6 +156,15 @@ int main(int argc, char** argv) {
             for(int p=1;p<size;++p) stop[2*p]=-1.;
             if(size>1) MPI_Scatter(stop.data(),2,MPI_DOUBLE,dummy,2,MPI_DOUBLE,0,MPI_COMM_WORLD);
             std::cout<<"PASS "<<scenario<<std::endl;
+        }
+        std::vector<unsigned long long> evaluations(size);
+        MPI_Gather(&m.evaluations, 1, MPI_UNSIGNED_LONG_LONG, evaluations.data(), 1,
+                   MPI_UNSIGNED_LONG_LONG, 0, MPI_COMM_WORLD);
+        if (!rank) {
+            for (unsigned r=0;r<evaluations.size();++r)
+                check(r<std::min<unsigned>(size,m.GetNChains()) ? evaluations[r]>0 : evaluations[r]==0,
+                      "likelihood dispatch failed to use every available rank up to the replica count");
+            std::cout << "All available replica-evaluation ranks were exercised (including rank 0)\n";
         }
     } catch(const std::exception& e) {
         std::cerr<<"rank "<<rank<<": "<<e.what()<<std::endl;

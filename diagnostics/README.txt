@@ -311,6 +311,23 @@ separate loaded warmup phase. The Python suite includes streaming reports,
 committed-window validation, partial trailing output, phase/run identities,
 transport-only analysis and plotting, alongside the statistical tests.
 
+MPI process allocation
+----------------------
+Likelihood evaluation is batched over all MPI ranks, including rank 0. With
+R replica slots and P launched processes, each coordinate or joint proposal
+requires ceil(R/P) batches; extra ranks beyond R have no likelihood task.
+For four PT ladders and 17 temperatures, R=68: 35 processes require two batches,
+68 or 69 require one. Statistics, histogram filling and application callbacks
+on rank 0 may limit overall speedup.
+
+The sampler startup summary reports the actual process/replica/batch counts,
+including when loading a tuned proposal. A scheduler allocation does not launch
+MPI processes itself. PBS job scripts must pass the CPU-slot count from
+PBS_NODEFILE to mpiexec -n, rather than the number of unique hostnames. GoldenModes
+ships a tested PBS launcher and an allocation-mismatch guard. The MPI regression
+tests count likelihood evaluations on every rank, including partial batches and
+surplus ranks, and check each usable rank actually receives work.
+
 Selectable staged warmup
 ------------------------
 Legacy stopping remains the default. The staged policy separates tuning,
@@ -451,3 +468,84 @@ scale method, giving direct coverage of the two separate options.
 Method references:
 https://github-pages.ucl.ac.uk/rmcmc/reference/stochastic_approximation_scale_adapter.html
 https://doi.org/10.1080/03610926.2014.936562
+
+
+Optional prerun temperature optimization
+---------------------------------------
+Syed et al., "Non-Reversible Parallel Tempering: a Scalable Highly Parallel
+MCMC Scheme", https://arxiv.org/abs/1905.02939, Sections 5.1, 5.2 and 5.4,
+provides the communication-barrier schedule optimization used here. BAT already
+uses deterministic even/odd adjacent exchanges. This implementation optimizes
+spacing only: the number of temperatures/ladders, T=1, Tmax and swap interval
+stay fixed. It uses monotone piecewise-linear barrier interpolation, rather
+than the paper's example cubic interpolation, and bounded damped updates.
+It does not implement automatic replica-count selection or path optimization.
+
+Configure before initialization:
+  model.SetParallelTempering({1., 2., 4., 8., 16.}, 4, 10);
+  model.SetPreRunPolicy(BCEngineMCMC::kPreRunStaged, 2000);
+  model.SetNIterationsPreRunMax(50000);
+  model.SetNIterationsPreRunCheck(1000);
+  model.SetNIterationsPreRunFactorized(10000);
+  model.SetPTTemperatureAdaptation(true, 1000, 4, 0.5);
+  model.SetPTTemperatureAdaptationOutput("fit_pt_temperature_adaptation.csv");
+  model.SetProposalFunctionOutput("fit_proposal.txt");
+
+Disabled by default. Requires at least three temperatures, staged warmup,
+positive settling, no loaded proposal and a positive proposal-check interval.
+The initial batch must include an exchange round. Four doubling batches of
+1000, 2000, 4000 and 8000 sweeps update the ladder at sweeps 1000, 3000, 7000
+and 15000. The sum initial_sweeps*(2^rounds-1), and the factorized phase when
+using joint proposals, must each leave at least one FULL proposal-check window
+within the adaptation budget. Rounds are in [1,30]; damping is finite in (0,1].
+These are minimum valid budgets, not evidence of adequate mixing.
+
+Before any swaps in each exchange round, BAT estimates rejection probability
+for EVERY neighboring pair, pooling independent ladders. This uses existing
+untempered log likelihoods, with no extra likelihood evaluation or random draw.
+Summed mean rejections approximate the cumulative communication barrier. The
+new grid has equal increments in the estimated barrier, blended with the old
+grid; every inverse-temperature gap changes by at most exp(+/-0.5). A tiny
+positive floor regularizes zero-rejection intervals. The first and last
+temperatures are preserved exactly. Endpoints at finite Tmax mean these are
+estimates over the chosen temperature interval, not a guarantee that the
+hottest chain explores all modes or samples the prior independently.
+
+Proposal scales and covariance shapes continue adapting after each grid
+change. Old-grid moments are cleared and the covariance learning-rate counter
+restarts; current proposals are retained as starting guesses. Smooth scale
+updates retain their diminishing-gain counters. After the last grid update,
+proposals train for the remaining budget, then both grid and proposals stay
+fixed throughout discarded settling and production. Production counts and
+histograms exclude all adaptation and settling samples.
+
+History CSV rows record update (0=initial), sweep, temperature index, old/new
+temperature, expected rejection to the next OLD temperature, observation count,
+summed barrier, actual damping and frozen flag. The last temperature has no
+next-edge rejection. Streaming diagnostics enable this history automatically;
+SetPTTemperatureAdaptationOutput also works without streaming. The atomic
+warmup status adds temperature_adaptation, temperature_updates,
+last_temperature_update and temperatures_frozen. Blocks are committed BEFORE
+changing the grid, so each block uses its actual temperatures. The analyzer
+retains those historical rows and reports adaptation metadata in summary.json;
+prerun occupancies are never posterior weights. pt_temperatures.csv reflects
+the current grid when streaming is enabled. Production uses only the final grid.
+
+Optimized-grid proposals use cache format BAT_MPI_PROPOSAL 2, adding a validated
+PT_LADDER header (ladder count and ordered temperatures). Reloading automatically
+restores optimized intermediate temperatures, with their matching proposals,
+before reevaluating starting points. Configure the same number of temperatures,
+independent ladders and endpoints; the initial intermediates may differ. Never
+enable temperature adaptation with LoadProposalFunction. A re-export preserves
+the v2 metadata. Existing unoptimized caches remain v1 and retain exact ladder
+matching. Older BAT cannot load v2 caches: rebuild/reinstall BAT and all clients.
+The cache still is not a complete chain/RNG checkpoint or a convergence claim.
+
+Validate improvements at equal computational cost using cold-chain R-hat,
+ESS/hour (including region indicators), region-weight MCSE and agreement across
+independent ladders. Round-trip rates and local/region transport are supporting
+diagnostics; improved swaps alone do not demonstrate improved posterior mixing.
+Regression tests PT_temperature_factorized and PT_temperature_joint cover an
+analytic non-flat-prior Gaussian target, bounded inversion, exact batch budgets,
+frozen production kernels, committed diagnostic boundaries, v2 cache restoration
+and invalid configurations. Existing v1, ordinary-MCMC and staged tests remain.

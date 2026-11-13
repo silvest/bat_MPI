@@ -82,6 +82,8 @@ void BCEngineMCMC::ResetPreRunStatus()
     fWarmup.status.scale_target = fWarmup.scale_target;
     fWarmup.status.scale_gain = fWarmup.scale_gain;
     fWarmup.status.scale_decay = fWarmup.scale_decay;
+    fWarmup.status.temperature_adaptation = fPTTuning.enabled;
+    fWarmup.status.temperatures_frozen = !fPTTuning.enabled;
     fWarmup.fixed_kernel = false;
 }
 
@@ -101,7 +103,7 @@ void BCEngineMCMC::WritePreRunStatus(const std::string& filename) const
     const auto& s = fWarmup.status;
     out << "policy,stage,stop_reason,adaptation_sweeps,settling_sweeps,adaptation_complete,settling_complete,proposal_loaded,"
            "adaptation_efficiency_outliers,adaptation_zero_acceptance,settling_efficiency_outliers,settling_zero_acceptance,"
-           "legacy_rvalue_checked,legacy_rvalue_passed,posterior_convergence_assessed,scale_adaptation,scale_target,scale_gain,scale_decay,scale_max_log_step,factorized_scale_updates,joint_scale_updates\n"
+           "legacy_rvalue_checked,legacy_rvalue_passed,posterior_convergence_assessed,scale_adaptation,scale_target,scale_gain,scale_decay,scale_max_log_step,factorized_scale_updates,joint_scale_updates,temperature_adaptation,temperature_updates,last_temperature_update,temperatures_frozen\n"
         << (s.policy == kPreRunStaged ? "staged" : "legacy") << ',' << s.stage << ',' << s.stop_reason << ','
         << s.adaptation_sweeps << ',' << s.settling_sweeps << ',' << s.adaptation_complete << ','
         << s.settling_complete << ',' << s.proposal_loaded << ',' << s.adaptation_efficiency_outliers << ','
@@ -109,7 +111,8 @@ void BCEngineMCMC::WritePreRunStatus(const std::string& filename) const
         << s.settling_zero_acceptance << ',' << s.legacy_rvalue_checked << ',' << s.legacy_rvalue_passed << ','
         << s.posterior_convergence_assessed << ',' << (s.scale_adaptation == kScaleSmooth ? "smooth" : "legacy") << ','
         << s.scale_target << ',' << s.scale_gain << ',' << s.scale_decay << ",0.5,"
-        << s.factorized_scale_updates << ',' << s.joint_scale_updates << '\n';
+        << s.factorized_scale_updates << ',' << s.joint_scale_updates << ',' << s.temperature_adaptation << ','
+        << s.temperature_updates << ',' << s.last_temperature_update << ',' << s.temperatures_frozen << '\n';
     out.flush();
     if (!out) throw std::runtime_error("Cannot flush warmup status: " + temporary);
     out.close();
@@ -140,6 +143,8 @@ void BCEngineMCMC::RecordPreRunEfficiencies(bool settling, bool joint)
 
 void BCEngineMCMC::RunFixedProposalWarmup(unsigned sweeps)
 {
+    if (!fWarmup.status.temperatures_frozen)
+        throw std::logic_error("Temperature tuning must finish before fixed-kernel settling");
     fWarmup.status.stage = "settling";
     fWarmup.status.settling_sweeps = 0;
     fWarmup.status.settling_complete = false;

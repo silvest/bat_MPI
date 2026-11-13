@@ -109,7 +109,8 @@ def analyze_streams(prefixes, output, no_plots=False, trace_points=2000):
                 status = dict(status_rows[0])
                 for key in ('adaptation_sweeps', 'settling_sweeps', 'adaptation_efficiency_outliers',
                             'adaptation_zero_acceptance', 'settling_efficiency_outliers', 'settling_zero_acceptance',
-                            'factorized_scale_updates', 'joint_scale_updates'):
+                            'factorized_scale_updates', 'joint_scale_updates',
+                            'temperature_updates', 'last_temperature_update'):
                     if key in status:
                         status[key] = number(status, key, True)
                         if status[key] < 0: raise ValueError(f'Negative warmup status counter: {key}')
@@ -118,11 +119,18 @@ def analyze_streams(prefixes, output, no_plots=False, trace_points=2000):
                         status[key] = number(status, key)
                         if not math.isfinite(status[key]): raise ValueError(f'Nonfinite warmup scale setting: {key}')
                 for key in ('adaptation_complete', 'settling_complete', 'proposal_loaded',
-                            'legacy_rvalue_checked', 'legacy_rvalue_passed', 'posterior_convergence_assessed'):
+                            'legacy_rvalue_checked', 'legacy_rvalue_passed', 'posterior_convergence_assessed',
+                            'temperature_adaptation', 'temperatures_frozen'):
                     if key in status:
                         if status[key] not in ('0', '1'): raise ValueError(f'Invalid warmup status flag: {key}')
                         status[key] = status[key] == '1'
                 run_info['warmup_status'] = status
+                if status.get('temperature_adaptation'):
+                    run_info['temperature_adaptation'] = dict(
+                        updates=status.get('temperature_updates', 0),
+                        frozen=status.get('temperatures_frozen', False),
+                        history=str(prefix) + 'pt_temperature_adaptation.csv',
+                        note='Prerun block tables retain the actual temperatures used in each block; production uses the frozen ladder.')
             if not phases.get(preferred, {}).get('completed', False):
                 issues.append(f"run {run}: {preferred} interrupted or still running; using committed sweeps through {phases.get(preferred, {}).get('last_sweep', 0)}")
             # Copy full committed block tables in a streaming pass. Only compact
@@ -131,6 +139,11 @@ def analyze_streams(prefixes, output, no_plots=False, trace_points=2000):
                 path = Path(str(prefix) + suffix)
                 if not path.exists():
                     raise ValueError(f"Missing streaming PT file: {path}")
+                # Ladder changes can commit short blocks between regular checkpoints.
+                # Stream the ledger alongside EACH table instead of deriving windows
+                # from block*interval or keeping the entire ledger in memory.
+                ledger = iter(rows(str(prefix) + 'pt_checkpoints.csv'))
+                window = None
                 for row in rows(path):
                     phase = row.get('phase')
                     try:
@@ -145,7 +158,11 @@ def analyze_streams(prefixes, output, no_plots=False, trace_points=2000):
                     if block < 0 or any(v is None for v in row.values()) or None in row:
                         raise ValueError(f"Incomplete committed PT row: {path}")
                     first, last = (number(row, k, True) for k in ('first_sweep', 'last_sweep'))
-                    if first != block*limit['interval']+1 or last != min((block+1)*limit['interval'], limit['last_sweep']):
+                    while window is None or (window['phase'], int(window['block'])) != (phase, block):
+                        window = next(ledger, None)
+                        if window is None:
+                            raise ValueError(f"PT row has no ordered committed window: {path}")
+                    if first != int(window['first_sweep']) or last != int(window['last_sweep']):
                         raise ValueError(f"PT row does not match committed window: {path}")
                     row = dict(run=run, **row)
                     if destination not in writers:
@@ -211,21 +228,31 @@ def analyze_streams(prefixes, output, no_plots=False, trace_points=2000):
                     history.append((sweep, number(row, 'temperature'), number(row, 'log_likelihood')))
             # Missing region rows must never quietly become a zero occupancy.
             groups = defaultdict(dict)
+            exposure = {}
             for key, (count, draws) in occupancy.items():
                 if key[0] != run:
                     continue
                 _, phase, ladder, slot, temp, part, region = key
-                if draws != phases[phase]['last_sweep'] or not 0 <= count <= draws:
+                if not 0 < draws <= phases[phase]['last_sweep'] or not 0 <= count <= draws:
                     raise ValueError('Missing/invalid committed PT occupancy counts')
-                groups[(phase, ladder, slot, temp, part)][region] = count
+                group = (phase, ladder, slot, temp, part)
+                if group in exposure and exposure[group] != draws:
+                    raise ValueError('PT region occupancy exposure differs between labels')
+                exposure[group] = draws
+                groups[group][region] = count
             for key in local:
                 if key[0] == run and phases[key[1]]['last_sweep']:
                     for part in schema:
                         if (key[1], key[2], key[3], key[4], part) not in groups:
                             raise ValueError('Missing committed PT occupancy group')
             for key, counts in groups.items():
-                if set(counts) != set(schema[key[-1]]) or sum(counts.values()) != phases[key[0]]['last_sweep']:
+                if set(counts) != set(schema[key[-1]]) or sum(counts.values()) != exposure[key]:
                     raise ValueError('PT region occupancies do not partition all committed sweeps')
+            slot_exposure = defaultdict(int)
+            for (phase, ladder, slot, temp, part), draws in exposure.items():
+                slot_exposure[(phase, ladder, slot, part)] += draws
+            if any(draws != phases[key[0]]['last_sweep'] for key, draws in slot_exposure.items()):
+                raise ValueError('PT region occupancies do not cover all committed sweeps across temperature grids')
             for part, labels in schema.items():
                 observed = [(key, value) for key, value in occupancy.items()
                             if key[0] == run and key[1] == preferred and key[5] == part]

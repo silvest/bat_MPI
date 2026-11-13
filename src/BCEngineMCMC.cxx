@@ -203,6 +203,8 @@ BCEngineMCMC::BCEngineMCMC(const BCEngineMCMC& other)
       fObjectTrash(other.fObjectTrash)
 {
     fPT = other.fPT;
+    fPTTuning = other.fPTTuning;
+    fPTTuning.output.clear();
     fProposalCache = other.fProposalCache;
     fWarmup = other.fWarmup;
     fWarmup.output.clear();
@@ -230,6 +232,8 @@ BCEngineMCMC& BCEngineMCMC::operator=(const BCEngineMCMC& other)
         fMCMCThreadLocalStorage = other.fMCMCThreadLocalStorage;
         fChainIndex = other.fChainIndex;
         fPT = other.fPT;
+        fPTTuning = other.fPTTuning;
+        fPTTuning.output.clear();
         fProposalCache = other.fProposalCache;
         fWarmup = other.fWarmup;
         fWarmup.output.clear();
@@ -447,6 +451,8 @@ void BCEngineMCMC::SetPrecision(const BCEngineMCMC& other)
 {
     SetNChains(other.fMCMCNChains);
     fPT = other.fPT;
+    fPTTuning = other.fPTTuning;
+    fPTTuning.output.clear();
     fProposalCache = other.fProposalCache;
     fMCMCNLag                             = other.fMCMCNLag;
     fMCMCNIterationsPreRunMin             = other.fMCMCNIterationsPreRunMin;
@@ -1660,9 +1666,15 @@ void BCEngineMCMC::SaveProposalFunction(const std::string& filename) const
         out.imbue(std::locale::classic());
         out.exceptions(std::ios::failbit | std::ios::badbit);
         out << std::setprecision(std::numeric_limits<double>::max_digits10);
-        out << "BAT_MPI_PROPOSAL 1\n" << n << ' ' << d << ' ' << GetNChains() << ' '
+        const bool optimized = fProposalCache.optimized_ladder;
+        out << "BAT_MPI_PROPOSAL " << (optimized ? 2 : 1) << '\n' << n << ' ' << d << ' ' << GetNChains() << ' '
             << fMCMCProposeMultivariate << ' ' << fMCMCProposalFunctionDof << ' '
             << fMultivariateCovarianceUpdates << '\n';
+        if (optimized) {
+            out << "PT_LADDER " << GetNColdChains() << ' ' << fPT.temperatures.size();
+            for (double temperature : fPT.temperatures) out << ' ' << temperature;
+            out << '\n';
+        }
         for (unsigned p = 0; p < n; ++p) {
             const BCParameter& par = GetParameter(p);
             out << std::quoted(par.GetName()) << ' ' << par.GetLowerLimit() << ' '
@@ -1708,12 +1720,28 @@ void BCEngineMCMC::InitializeFromProposalFunction()
     std::string magic;
     unsigned version = 0, n = 0, d = 0, chains = 0, multivariate = 0, updates = 0;
     double dof = 0.;
-    if (!(in >> magic >> version) || magic != "BAT_MPI_PROPOSAL" || version != 1)
+    if (!(in >> magic >> version) || magic != "BAT_MPI_PROPOSAL" || (version != 1 && version != 2))
         fail("missing file or unsupported format/version");
     if (!(in >> n >> d >> chains >> multivariate >> dof >> updates) ||
         n != GetNParameters() || d != GetNFreeParameters() || chains != GetNChains() ||
         multivariate != static_cast<unsigned>(fMCMCProposeMultivariate) || !std::isfinite(dof))
         fail("parameter/replica counts or proposal type differ, or invalid header");
+    std::vector<double> temperatures = fPT.temperatures;
+    if (version == 2) {
+        std::string marker;
+        unsigned ladders = 0, count = 0;
+        if (!(in >> marker >> ladders >> count) || marker != "PT_LADDER" ||
+            !GetParallelTempering() || count < 3 || count != temperatures.size() || ladders != GetNColdChains())
+            fail("optimized temperature ladder dimensions differ");
+        for (unsigned t = 0; t < count; ++t) {
+            double temperature;
+            if (!(in >> temperature) || !std::isfinite(temperature) || temperature < 1. ||
+                (t && temperature <= temperatures[t-1])) fail("invalid optimized temperature ladder");
+            temperatures[t] = temperature;
+        }
+        if (temperatures.front() != fPT.temperatures.front() || temperatures.back() != fPT.temperatures.back())
+            fail("optimized temperature ladder endpoints differ");
+    }
     // Validate against the current model before allocating or initializing chains.
     for (unsigned p = 0; p < n; ++p) {
         std::string name;
@@ -1739,7 +1767,8 @@ void BCEngineMCMC::InitializeFromProposalFunction()
         return value;
     };
     for (unsigned c = 0; c < chains; ++c) {
-        if (read_finite() != GetChainTemperature(c)) fail("temperature ladder or replica ordering differ");
+        const double temperature = temperatures.empty() ? 1. : temperatures.at(c/GetNColdChains());
+        if (read_finite() != temperature) fail("temperature ladder or replica ordering differ");
         unsigned scale_count = 0;
         if (!(in >> scale_count) || (multivariate ? (scale_count != 1 && scale_count != n) : scale_count != n))
             fail("invalid proposal scale dimensions");
@@ -1776,6 +1805,8 @@ void BCEngineMCMC::InitializeFromProposalFunction()
 
     // Saved positions are initial guesses only. Evaluate the current likelihood
     // and priors; no cached log values, convergence flag, statistics or RNG is reused.
+    fPT.temperatures = temperatures;
+    fProposalCache.optimized_ladder = version == 2;
     SetInitialPositions(positions);
     fMCMCNIterationsPreRunFactorized = 0;
     fMCMCProposalFunctionDof = dof;
@@ -1788,6 +1819,7 @@ void BCEngineMCMC::InitializeFromProposalFunction()
     fWarmup.status.adaptation_complete = true;
     fWarmup.status.stop_reason = "loaded_proposal";
     BCLog::OutSummary("Loaded proposal: " + fProposalCache.input);
+    if (version == 2) BCLog::OutSummary("Restored the optimized temperature ladder from the proposal cache (fixed during warmup and production).");
     RunFixedProposalWarmup(fProposalCache.warmup);
     fMCMCCurrentIteration = -1;
     fProposalCache.loaded = true;
@@ -1869,6 +1901,7 @@ void BCEngineMCMC::UpdateReplicaJourneys()
 
 void BCEngineMCMC::ExchangeReplicas()
 {
+    RecordPTTemperatureRejections();
     const unsigned ladders = GetNColdChains();
     // Alternating disjoint adjacent pairs; with two temperatures attempt every round.
     const unsigned start = fPT.temperatures.size() == 2 ? 0 : fPT.exchange_round % 2;
@@ -2098,6 +2131,7 @@ void BCEngineMCMC::CloseOutputFile()
 // --------------------------------------------------------
 bool BCEngineMCMC::MetropolisPreRun()
 {
+    ValidatePTTemperatureAdaptation();
     const bool staged = fWarmup.policy == kPreRunStaged;
     const bool smooth = fWarmup.scale_adaptation == kScaleSmooth;
     if (smooth && fProposalCache.input.empty() &&
@@ -2124,6 +2158,7 @@ bool BCEngineMCMC::MetropolisPreRun()
 
     // initialize Markov chain
     MCMCInitialize();
+    fProposalCache.optimized_ladder = false;
 
     // A fixed first coordinate has zero coordinate scale. It still needs a
     // positive active covariance multiplier when using the joint kernel.
@@ -2182,6 +2217,7 @@ bool BCEngineMCMC::MetropolisPreRun()
     fMCMCPhase = BCEngineMCMC::kPreRun;
     fWarmup.status.stage = "adapting";
     fWarmup.status.stop_reason = "pending";
+    InitializePTTemperatureAdaptation();
     UpdatePreRunStatusOutput();
     if (staged)
         BCLog::OutSummary(Form(" --> Staged policy: exactly %u adaptation sweeps, then %u discarded fixed-proposal sweeps; posterior convergence is assessed separately.", fMCMCNIterationsPreRunMax, fWarmup.settling_sweeps));
@@ -2224,8 +2260,16 @@ bool BCEngineMCMC::MetropolisPreRun()
             smooth_window = std::min(std::max(1u, nIterationsPreRunCheck / GetNFreeParameters()),
                 fMCMCNIterationsPreRunFactorized - unsigned(fMCMCCurrentIteration));
         }
-        // Generate (nIterationsCheckConvergence) new points in each chain
-        for (unsigned i = 0; i < (smooth ? smooth_window : ((fMCMCProposeMultivariate && fMCMCCurrentIteration < fMCMCNIterationsPreRunFactorized) ? std::max(1u, nIterationsPreRunCheck / GetParameters().GetNFreeParameters()) : nIterationsPreRunCheck )) && fMCMCCurrentIteration < (int)fMCMCNIterationsPreRunMax; ++i) {
+        unsigned window = smooth ? smooth_window :
+            ((fMCMCProposeMultivariate && fMCMCCurrentIteration < fMCMCNIterationsPreRunFactorized) ?
+             std::max(1u, nIterationsPreRunCheck / GetParameters().GetNFreeParameters()) : nIterationsPreRunCheck);
+        if (fPTTuning.enabled && !fWarmup.status.temperatures_frozen)
+            window = std::min(window, fPTTuning.next_sweep-unsigned(fMCMCCurrentIteration));
+        // Stop exactly on a temperature batch boundary, even in coordinate warmup.
+        for (unsigned i = 0; i < (fPTTuning.enabled ? window :
+                (smooth ? smooth_window : ((fMCMCProposeMultivariate && fMCMCCurrentIteration < fMCMCNIterationsPreRunFactorized) ?
+                 std::max(1u, nIterationsPreRunCheck / GetParameters().GetNFreeParameters()) : nIterationsPreRunCheck)))
+                && fMCMCCurrentIteration < (int)fMCMCNIterationsPreRunMax; ++i) {
             // get new point & calculate observables
             GetNewPointMetropolis();
             EvaluateObservables();
@@ -2428,6 +2472,7 @@ bool BCEngineMCMC::MetropolisPreRun()
             if (UpdateMultivariateProposalFunctionCovariances())
                 CalculateCholeskyDecompositions();
         }
+        if (UpdatePTTemperatures()) UpdatePreRunStatusOutput();
 
         if (fMCMCCurrentIteration >= (int)fMCMCNIterationsPreRunMax)
             continue;
@@ -2610,6 +2655,10 @@ bool BCEngineMCMC::Metropolis()
 
     // check if prerun should be performed
     if (fMCMCPhase == BCEngineMCMC::kUnsetPhase) {
+        const unsigned ranks = static_cast<unsigned>(std::max(1, procnum));
+        const unsigned batches = fMCMCNChains ? 1 + (fMCMCNChains - 1) / ranks : 0;
+        BCLog::OutSummary(Form(" --> MPI likelihood scheduling: %u processes, %u replica slots, at most %u active processes, %u batch(es) per proposal; rank 0 also evaluates likelihoods.",
+            ranks, fMCMCNChains, std::min(ranks, fMCMCNChains), batches));
         if (!MetropolisPreRun())
             return false;
 

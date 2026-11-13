@@ -88,6 +88,8 @@ void BCEngineMCMC::BeginPTDiagnostics(const std::string& phase)
         d.prefix = prefix; d.checkpoint_sweeps = checkpoint; d.trace_sweeps = trace;
     }
     if (!d.initialized) {
+        if (!fPTTuning.enabled)
+            std::remove((d.prefix + "pt_temperature_adaptation.csv").c_str());
         d.partitions = DefinePTDiagnosticPartitions();
         std::set<std::string> names;
         for (const auto& p : d.partitions) {
@@ -127,6 +129,7 @@ void BCEngineMCMC::BeginPTDiagnostics(const std::string& phase)
         d.initialized = true;
     }
     d.phase = phase;
+    WritePTTemperatureConfiguration();
     d.sweep = d.window_start = d.block = 0;
     d.slots.assign(GetNChains(), PTDiagnosticSlot());
     for (unsigned c = 0; c < GetNChains(); ++c) {

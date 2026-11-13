@@ -292,6 +292,19 @@ public:
     bool IsColdChain(unsigned chain) const { return chain < GetNColdChains(); }
     double GetChainTemperature(unsigned chain) const;
     const std::vector<double>& GetTemperatures() const { return fPT.temperatures; }
+    /** Optional Syed et al. communication-barrier schedule tuning. Configure before
+     * initialization; requires PT with >=3 temperatures and staged warmup.
+     * Batches last initial_sweeps, 2*initial_sweeps, ...; all updates must leave
+     * at least one proposal-check window on the final grid before fixed settling.
+     * Endpoints, replica count and swap interval remain fixed. Damping is in (0,1];
+     * each inverse-temperature gap changes by at most exp(+/-0.5) per update.
+     * Disabled by default; incompatible with loading a proposal cache. */
+    void SetPTTemperatureAdaptation(bool enabled = true, unsigned initial_sweeps = 1000,
+                                    unsigned rounds = 4, double damping = 0.5);
+    bool GetPTTemperatureAdaptation() const { return fPTTuning.enabled; }
+    /** Optional history CSV (also written automatically when PT streaming is enabled).
+     * Not copied with an engine. */
+    void SetPTTemperatureAdaptationOutput(const std::string& filename);
     const std::vector<unsigned long long>& GetSwapAttempts() const { return fPT.attempts; }
     const std::vector<unsigned long long>& GetSwapAccepts() const { return fPT.accepts; }
     /** Main-run swap statistics, aggregated over independent ladders. */
@@ -344,6 +357,8 @@ public:
         bool adaptation_complete = false, settling_complete = false, proposal_loaded = false;
         bool legacy_rvalue_checked = false, legacy_rvalue_passed = false;
         bool posterior_convergence_assessed = false;
+        bool temperature_adaptation = false, temperatures_frozen = true;
+        unsigned temperature_updates = 0, last_temperature_update = 0;
     };
     /** Select before initialization. Staged tuning lasts exactly
      * GetNIterationsPreRunMax() sweeps, ignoring the legacy minimum and early-stop
@@ -1974,6 +1989,21 @@ protected:
         ParallelTemperingState() : swap_interval(10), exchange_round(0), tree_replica(0) {}
     };
     ParallelTemperingState fPT;
+    struct PTTemperatureTuning {
+        bool enabled = false;
+        unsigned initial_sweeps = 1000, rounds = 4, next_sweep = 0, batch_sweeps = 0;
+        double damping = 0.5;
+        std::string output;
+        std::vector<double> rejection_sum;
+        std::vector<unsigned long long> observations;
+    } fPTTuning;
+    void ValidatePTTemperatureAdaptation() const;
+    void InitializePTTemperatureAdaptation();
+    void RecordPTTemperatureRejections();
+    bool UpdatePTTemperatures();
+    void WritePTTemperatureUpdate(const std::vector<double>& old, const std::vector<double>& rejections,
+                                   double damping, bool initial = false) const;
+    void WritePTTemperatureConfiguration() const;
     void ExchangeReplicas();
     void UpdateReplicaJourneys();
     void ResetReplicaExchangeStatistics();
@@ -2035,7 +2065,8 @@ protected:
         std::string input, output;
         unsigned warmup;
         bool loaded;
-        ProposalCacheSettings() : warmup(1000), loaded(false) {}
+        bool optimized_ladder;
+        ProposalCacheSettings() : warmup(1000), loaded(false), optimized_ladder(false) {}
     };
     ProposalCacheSettings fProposalCache;
     void InitializeFromProposalFunction();
