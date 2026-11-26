@@ -1,10 +1,12 @@
 // End-to-end MPI tests against numerical quadrature, including nonconstant priors.
 #include <BAT/BCModel.h>
+#include <BAT/BCDisjointFlatPrior.h>
 #include <BAT/BCGaussianPrior.h>
 #include <BAT/BCLog.h>
 #include <TFile.h>
 #include <TH1.h>
 #include <TTree.h>
+#include <TRandom3.h>
 #include <mpi.h>
 #include <cmath>
 #include <iostream>
@@ -16,17 +18,73 @@
 static void check(bool ok, const std::string& message)
 { if (!ok) throw std::runtime_error(message); }
 
+using Intervals = std::vector<std::pair<double, double>>;
+static const Intervals support = {{1., 3.}, {-4., -3.}};
+
+static bool inSupport(double x)
+{ return (-4. <= x && x <= -3.) || (1. <= x && x <= 3.); }
+
+static void checkDisjointPrior()
+{
+    BCDisjointFlatPrior prior(support);
+    for (double x : {-4., -3.5, -3., 1., 2., 3.})
+        check(std::abs(prior.GetPrior(x) - 1./3.) < 1.e-14, "wrong uniform density on support");
+    for (double x : {-5., 0., 4.})
+        check(prior.GetLogPrior(x) == -INFINITY, "finite prior outside support");
+    check(std::abs(prior.GetIntegral() - 1.) < 1.e-14, "flat union prior is not normalized");
+    check(std::abs(prior.GetIntegral(-3.5, 2.5) - 2./3.) < 1.e-14, "wrong clipped integral");
+    check(prior.GetIntegral(-2., 0.) == 0., "nonzero mass in gap");
+    check(std::abs(prior.GetMean() - 1./6.) < 1.e-14, "wrong length-weighted mean");
+
+    const double width = std::ldexp(1., -20);
+    BCDisjointFlatPrior narrow({{.25, .25 + width}, {3.75, 3.75 + 2 * width}});
+    const double edges[] = {0., 1., 2., 4.};
+    TH1D bins("disjoint_bins", "", 3, edges);
+    BCH1D plot = narrow.GetBCH1D(&bins);
+    TH1* h = plot.GetHistogram();
+    check(h && std::abs(h->Integral(1, 1, "width") - 1./3.) < 1.e-14
+            && h->GetBinContent(2) == 0. && std::abs(h->Integral(3, 3, "width") - 2./3.) < 1.e-14,
+          "prior histogram lost mass from narrow intervals");
+
+    TRandom3 random(13421);
+    unsigned left = 0;
+    for (unsigned i = 0; i < 10000; ++i) {
+        const double x = prior.GetRandomValue(-3.5, 2.5, &random);
+        check(inSupport(x) && -3.5 <= x && x <= 2.5, "invalid draw from clipped support");
+        if (x < 0.) ++left;
+    }
+    check(std::abs(left / 10000. - 0.25) < 0.025, "wrong sampling weights on clipped intervals");
+
+    for (const auto& invalid : std::vector<Intervals>{
+             {}, {{0., 0.}, {1., 2.}}, {{2., 1.}, {3., 4.}},
+             {{0., 2.}, {1., 3.}}, {{0., 1.}, {1., 3.}}, {{0., 1.}, {2., INFINITY}}}) {
+        bool rejected = false;
+        try { BCDisjointFlatPrior bad(invalid); }
+        catch (const std::invalid_argument&) { rejected = true; }
+        check(rejected, "invalid interval union accepted");
+    }
+}
+
 class Mixture : public BCModel {
 public:
     std::vector<double> sum, positive;
     unsigned samples = 0, callbacks = 0, main_start_callbacks = 0;
+    unsigned gapProposals = 0;
     unsigned long long evaluations = 0;
-    bool bimodal;
-    Mixture(bool multimodal = true) : BCModel("pt_test"), bimodal(multimodal) {
+    bool bimodal, disjoint;
+    Mixture(bool multimodal = true, bool flatUnion = false)
+        : BCModel("pt_test"), bimodal(multimodal), disjoint(flatUnion) {
         AddParameter("x", -10., 10.);
-        GetParameter(0).SetPrior(std::make_shared<BCGaussianPrior>(0.7, 3.));
+        if (disjoint)
+            GetParameter(0).SetPrior(std::make_shared<BCDisjointFlatPrior>(support));
+        else
+            GetParameter(0).SetPrior(std::make_shared<BCGaussianPrior>(0.7, 3.));
     }
     double LogLikelihood(const std::vector<double>& p) override {
+        if (disjoint) {
+            check(inSupport(p[0]), "evaluated likelihood outside disjoint prior support");
+            return 0.;
+        }
         if (!bimodal) return -0.5 * std::pow((p[0]-1.)/0.8, 2);
         double a = std::log(0.3 / 0.45) - 0.5 * std::pow((p[0]+3.)/0.45, 2);
         double b = std::log(0.7 / 0.8) - 0.5 * std::pow((p[0]-3.)/0.8, 2);
@@ -49,17 +107,23 @@ public:
         ++samples;
         for (unsigned c=0; c<GetNChains(); ++c) {
             const ChainState& s = fMCMCStates[c];
+            if (disjoint) check(inSupport(s.parameters[0]), "stored sample outside support");
             sum[c] += s.parameters[0];
             positive[c] += s.parameters[0]>0.;
             check(std::abs(s.log_probability - s.log_prior - s.log_likelihood)<1e-10,
                   "cached probability fields are inconsistent after exchange");
         }
     }
-    void MCMCCurrentPointInterface(const std::vector<double>& p, int c, bool) override {
+    void MCMCCurrentPointInterface(const std::vector<double>& p, int c, bool accepted) override {
         check(c>=0 && unsigned(c)<GetNChains() && p.size()==1, "proposal callback out of bounds");
+        if (disjoint && -3. < p[0] && p[0] < 1.) {
+            ++gapProposals;
+            check(!accepted, "accepted proposal in the gap");
+        }
         ++callbacks;
     }
     std::pair<double,double> reference(double temperature) {
+        if (disjoint) return {1./6., 2./3.}; // Flat likelihood, one unit of width left and two right.
         double norm=0., mean=0., pos=0.;
         const double dx=0.0005;
         for (double x=-10.+dx/2.; x<10.; x+=dx) {
@@ -78,7 +142,8 @@ int main(int argc, char** argv) {
     try {
         const std::string scenario=argc>1?argv[1]:"serial";
         const bool disabled=scenario=="disabled", two=scenario=="two_temperatures";
-        Mixture m(!disabled);
+        const bool disjoint = scenario == "disjoint";
+        Mixture m(!disabled, disjoint);
         BCLog::SetLogLevelScreen(BCLog::nothing);
         if(rank) {
             double recv[2], value;
@@ -89,6 +154,7 @@ int main(int argc, char** argv) {
                 MPI_Gather(&value,1,MPI_DOUBLE,nullptr,1,MPI_DOUBLE,0,MPI_COMM_WORLD);
             }
         } else {
+            if (disjoint) checkDisjointPrior();
             // Configuration validation must fail without starting any collectives.
             for(const auto& invalid : std::vector<std::vector<double>>{{},{2.,4.},{1.,1.},{1.,INFINITY},{1.,0.5}}) {
                 bool failed=false;
@@ -106,11 +172,20 @@ int main(int argc, char** argv) {
             if (scenario=="factorized_warmup") m.SetNIterationsPreRunFactorized(1000);
             m.SetNIterationsRun(40000);
             m.SetInitialPositionScheme(BCEngineMCMC::kInitRandomPrior);
+            // Without a jump, all replicas would remain in the left interval.
+            if (disjoint)
+                m.SetInitialPositions(std::vector<std::vector<double>>(m.GetNChains(), {-3.5}));
             const std::string filename="pt_"+scenario+".root";
             m.WriteMarkovChain(filename,"RECREATE",true,false);
             m.MarginalizeAll(BCIntegrate::kMargMetropolis);
             check(m.GetStatistics().n_samples==80000,"hot samples contaminated posterior statistics");
             check(m.GetMarginalizedHistogram(0)->GetEntries()==80000,"hot samples contaminated histogram");
+            if (disjoint) {
+                check(m.gapProposals > 0, "no proposals tested the excluded gap");
+                for (unsigned c = 0; c < m.GetNColdChains(); ++c)
+                    check(std::abs(m.positive[c] / m.samples - 2./3.) < .05,
+                          "cold chain failed to explore both intervals in proportion to their widths");
+            }
             // Check every temperature, not only the posterior: this detects accidental prior tempering.
             for(unsigned t=0;t<(disabled?1:m.GetTemperatures().size());++t) {
                 const double temp=disabled?1.:m.GetTemperatures()[t];
@@ -150,7 +225,7 @@ int main(int argc, char** argv) {
             check(saved_count==2,"parameter tree must describe cold chains only");
             f.Close();
             // Cold output can be reloaded as an ordinary posterior sample.
-            Mixture loaded(!disabled); loaded.LoadMCMC(filename,"","",false); loaded.Remarginalize(false);
+            Mixture loaded(!disabled, disjoint); loaded.LoadMCMC(filename,"","",false); loaded.Remarginalize(false);
             check(loaded.GetNChains()==2 && loaded.GetStatistics().n_samples==80000,"cold-chain reload failed");
             std::vector<double> stop(size*2,0.); double dummy[2];
             for(int p=1;p<size;++p) stop[2*p]=-1.;

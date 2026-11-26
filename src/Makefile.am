@@ -50,6 +50,7 @@ incs= \
 	BCVariableSet.h \
 	\
 	BCConstantPrior.h \
+	BCDisjointFlatPrior.h \
 	BCGaussianPrior.h \
 	BCCombinedPrior.h \
 	BCSplitGaussianPrior.h \
