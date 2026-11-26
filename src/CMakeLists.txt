@@ -18,6 +18,7 @@ set(BAT_DICT_HEADERS
   BAT/BCVariableSet.h
 
   BAT/BCConstantPrior.h
+  BAT/BCDisjointFlatPrior.h
   BAT/BCGaussianPrior.h
   BAT/BCCombinedPrior.h
   BAT/BCSplitGaussianPrior.h

@@ -144,7 +144,7 @@ am__DEPENDENCIES_1 =
 libBAT_la_DEPENDENCIES = $(am__DEPENDENCIES_1) $(am__DEPENDENCIES_2)
 am__objects_1 = BCHistogramBase.lo BCLog.lo BCMath.lo BCVariable.lo \
 	BCDataPoint.lo BCDataSet.lo BCH1D.lo BCH2D.lo BCParameter.lo \
-	BCAux.lo BCPrior.lo BCVariableSet.lo BCConstantPrior.lo \
+	BCAux.lo BCPrior.lo BCVariableSet.lo BCConstantPrior.lo BCDisjointFlatPrior.lo \
 	BCGaussianPrior.lo BCCombinedPrior.lo BCSplitGaussianPrior.lo \
 	BCCauchyPrior.lo BCObservable.lo BCTF1Prior.lo \
 	BCTF1LogPrior.lo BCTH1Prior.lo BCPositiveDefinitePrior.lo \
@@ -178,7 +178,7 @@ depcomp = $(SHELL) $(top_srcdir)/depcomp
 am__maybe_remake_depfiles = depfiles
 am__depfiles_remade = ./$(DEPDIR)/BCAux.Plo \
 	./$(DEPDIR)/BCCauchyPrior.Plo ./$(DEPDIR)/BCCombinedPrior.Plo \
-	./$(DEPDIR)/BCConstantPrior.Plo ./$(DEPDIR)/BCDataPoint.Plo \
+	./$(DEPDIR)/BCConstantPrior.Plo ./$(DEPDIR)/BCDisjointFlatPrior.Plo ./$(DEPDIR)/BCDataPoint.Plo \
 	./$(DEPDIR)/BCDataSet.Plo ./$(DEPDIR)/BCEmptyModel.Plo \
 	./$(DEPDIR)/BCEngineMCMC.Plo ./$(DEPDIR)/BCGaussianPrior.Plo \
 	./$(DEPDIR)/BCH1D.Plo ./$(DEPDIR)/BCH2D.Plo \
@@ -431,6 +431,7 @@ incs = \
 	BCVariableSet.h \
 	\
 	BCConstantPrior.h \
+	BCDisjointFlatPrior.h \
 	BCGaussianPrior.h \
 	BCCombinedPrior.h \
 	BCSplitGaussianPrior.h \
@@ -548,6 +549,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/BCCauchyPrior.Plo@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/BCCombinedPrior.Plo@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/BCConstantPrior.Plo@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/BCDisjointFlatPrior.Plo@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/BCDataPoint.Plo@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/BCDataSet.Plo@am__quote@ # am--include-marker
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/BCEmptyModel.Plo@am__quote@ # am--include-marker
@@ -786,6 +788,7 @@ distclean: distclean-am
 	-rm -f ./$(DEPDIR)/BCCauchyPrior.Plo
 	-rm -f ./$(DEPDIR)/BCCombinedPrior.Plo
 	-rm -f ./$(DEPDIR)/BCConstantPrior.Plo
+	-rm -f ./$(DEPDIR)/BCDisjointFlatPrior.Plo
 	-rm -f ./$(DEPDIR)/BCDataPoint.Plo
 	-rm -f ./$(DEPDIR)/BCDataSet.Plo
 	-rm -f ./$(DEPDIR)/BCEmptyModel.Plo
@@ -864,6 +867,7 @@ maintainer-clean: maintainer-clean-am
 	-rm -f ./$(DEPDIR)/BCCauchyPrior.Plo
 	-rm -f ./$(DEPDIR)/BCCombinedPrior.Plo
 	-rm -f ./$(DEPDIR)/BCConstantPrior.Plo
+	-rm -f ./$(DEPDIR)/BCDisjointFlatPrior.Plo
 	-rm -f ./$(DEPDIR)/BCDataPoint.Plo
 	-rm -f ./$(DEPDIR)/BCDataSet.Plo
 	-rm -f ./$(DEPDIR)/BCEmptyModel.Plo

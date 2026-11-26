@@ -10,6 +10,7 @@
 #pragma link C++ class BCAux-;
 #pragma link C++ class BCCauchyPrior-;
 #pragma link C++ class BCConstantPrior-;
+#pragma link C++ class BCDisjointFlatPrior-;
 #pragma link C++ class BCDataPoint-;
 #pragma link C++ class BCDataSet-;
 #pragma link C++ class BCEmptyModel-;
